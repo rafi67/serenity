@@ -34,14 +34,13 @@
 
 //#define TOKENIZER_TRACE
 
+#define PARSE_ERROR()                                                                      \
+    do {                                                                                   \
+        dbg() << "Parse error (tokenization)" << __PRETTY_FUNCTION__ << " @ " << __LINE__; \
+    } while (0)
+
 #define CONSUME_NEXT_INPUT_CHARACTER \
     current_input_character = next_codepoint();
-
-#define TODO()                                                                                              \
-    do {                                                                                                    \
-        dbg() << "[TODO: " << state_name(m_state) << "] '" << (char)current_input_character.value() << "'"; \
-        ASSERT_NOT_REACHED();                                                                               \
-    } while (0)
 
 #define SWITCH_TO(new_state)              \
     do {                                  \
@@ -231,6 +230,11 @@ _StartOfFunction:
                 {
                     SWITCH_TO(TagOpen);
                 }
+                ON(0)
+                {
+                    PARSE_ERROR();
+                    EMIT_CURRENT_CHARACTER;
+                }
                 ON_EOF
                 {
                     EMIT_EOF;
@@ -259,11 +263,19 @@ _StartOfFunction:
                 }
                 ON('?')
                 {
+                    PARSE_ERROR();
+                    create_new_token(HTMLToken::Type::Comment);
+                    RECONSUME_IN(BogusComment);
+                }
+                ON_EOF
+                {
                     TODO();
                 }
                 ANYTHING_ELSE
                 {
-                    TODO();
+                    PARSE_ERROR();
+                    EMIT_CHARACTER('<');
+                    RECONSUME_IN(Data);
                 }
             }
             END_STATE
@@ -282,6 +294,22 @@ _StartOfFunction:
                 {
                     SWITCH_TO_AND_EMIT_CURRENT_TOKEN(Data);
                 }
+                ON_ASCII_UPPER_ALPHA
+                {
+                    m_current_token.m_tag.tag_name.append(tolower(current_input_character.value()));
+                    continue;
+                }
+                ON(0)
+                {
+                    PARSE_ERROR();
+                    m_current_token.m_tag.tag_name.append("\uFFFD");
+                    continue;
+                }
+                ON_EOF
+                {
+                    PARSE_ERROR();
+                    EMIT_EOF;
+                }
                 ANYTHING_ELSE
                 {
                     m_current_token.m_tag.tag_name.append(current_input_character.value());
@@ -297,6 +325,23 @@ _StartOfFunction:
                     create_new_token(HTMLToken::Type::EndTag);
                     RECONSUME_IN(TagName);
                 }
+                ON('>')
+                {
+                    PARSE_ERROR();
+                    SWITCH_TO(Data);
+                }
+                ON_EOF
+                {
+                    PARSE_ERROR();
+                    // FIXME: Emit a U+003C LESS-THAN SIGN character token, a U+002F SOLIDUS character token and an end-of-file token.
+                    continue;
+                }
+                ANYTHING_ELSE
+                {
+                    PARSE_ERROR();
+                    create_new_token(HTMLToken::Type::Comment);
+                    RECONSUME_IN(BogusComment);
+                }
             }
             END_STATE
 
@@ -309,6 +354,27 @@ _StartOfFunction:
                 }
                 if (consume_next_if_match("DOCTYPE", CaseSensitivity::CaseInsensitive)) {
                     SWITCH_TO(DOCTYPE);
+                }
+            }
+            END_STATE
+
+            BEGIN_STATE(BogusComment)
+            {
+                ON('>')
+                {
+                    TODO();
+                }
+                ON_EOF
+                {
+                    TODO();
+                }
+                ON(0)
+                {
+                    TODO();
+                }
+                ANYTHING_ELSE
+                {
+                    TODO();
                 }
             }
             END_STATE
@@ -764,7 +830,7 @@ _StartOfFunction:
                 ON('>')
                 {
                     m_current_token.m_tag.self_closing = true;
-                    SWITCH_TO(Data);
+                    SWITCH_TO_AND_EMIT_CURRENT_TOKEN(Data);
                 }
                 ON_EOF
                 {
@@ -963,11 +1029,13 @@ _StartOfFunction:
                 }
                 ON_EOF
                 {
-                    TODO();
+                    PARSE_ERROR();
+                    EMIT_EOF;
                 }
                 ANYTHING_ELSE
                 {
-                    TODO();
+                    PARSE_ERROR();
+                    RECONSUME_IN(BeforeAttributeName);
                 }
             }
             END_STATE
@@ -1203,7 +1271,7 @@ _StartOfFunction:
                     }
 
                     if (!match.value().entity.ends_with(';')) {
-                        TODO();
+                        PARSE_ERROR();
                     }
 
                     m_temporary_buffer.clear();
@@ -1416,7 +1484,8 @@ _StartOfFunction:
                 }
                 ON(0)
                 {
-                    TODO();
+                    PARSE_ERROR();
+                    EMIT_CHARACTER("\uFFFD");
                 }
                 ON_EOF
                 {
@@ -1454,7 +1523,9 @@ _StartOfFunction:
                 ANYTHING_ELSE
                 {
                     // FIXME: Emit a U+003C LESS-THAN SIGN character token and a U+002F SOLIDUS character token. Reconsume in the RCDATA state.
-                    TODO();
+                    m_queued_tokens.enqueue(HTMLToken::make_character('<'));
+                    m_queued_tokens.enqueue(HTMLToken::make_character('/'));
+                    RECONSUME_IN(RCDATA);
                 }
             }
             END_STATE
@@ -1463,17 +1534,34 @@ _StartOfFunction:
             {
                 ON_WHITESPACE
                 {
-                    TODO();
+                    if (!current_end_tag_token_is_appropriate()) {
+                        m_queued_tokens.enqueue(HTMLToken::make_character('<'));
+                        m_queued_tokens.enqueue(HTMLToken::make_character('/'));
+                        for (auto codepoint : m_temporary_buffer)
+                            m_queued_tokens.enqueue(HTMLToken::make_character(codepoint));
+                        RECONSUME_IN(RCDATA);
+                    }
+                    SWITCH_TO(BeforeAttributeName);
                 }
                 ON('/')
                 {
-                    TODO();
+                    if (!current_end_tag_token_is_appropriate()) {
+                        m_queued_tokens.enqueue(HTMLToken::make_character('<'));
+                        m_queued_tokens.enqueue(HTMLToken::make_character('/'));
+                        for (auto codepoint : m_temporary_buffer)
+                            m_queued_tokens.enqueue(HTMLToken::make_character(codepoint));
+                        RECONSUME_IN(RCDATA);
+                    }
+                    SWITCH_TO(SelfClosingStartTag);
                 }
                 ON('>')
                 {
                     if (!current_end_tag_token_is_appropriate()) {
-                        // FIXME: Otherwise, treat it as per the "anything else" entry below.
-                        TODO();
+                        m_queued_tokens.enqueue(HTMLToken::make_character('<'));
+                        m_queued_tokens.enqueue(HTMLToken::make_character('/'));
+                        for (auto codepoint : m_temporary_buffer)
+                            m_queued_tokens.enqueue(HTMLToken::make_character(codepoint));
+                        RECONSUME_IN(RCDATA);
                     }
                     SWITCH_TO_AND_EMIT_CURRENT_TOKEN(Data);
                 }
@@ -1491,7 +1579,11 @@ _StartOfFunction:
                 }
                 ANYTHING_ELSE
                 {
-                    TODO();
+                    m_queued_tokens.enqueue(HTMLToken::make_character('<'));
+                    m_queued_tokens.enqueue(HTMLToken::make_character('/'));
+                    for (auto codepoint : m_temporary_buffer)
+                        m_queued_tokens.enqueue(HTMLToken::make_character(codepoint));
+                    RECONSUME_IN(RCDATA);
                 }
             }
             END_STATE
@@ -1504,7 +1596,8 @@ _StartOfFunction:
                 }
                 ON(0)
                 {
-                    TODO();
+                    PARSE_ERROR();
+                    EMIT_CHARACTER("\uFFFD");
                 }
                 ON_EOF
                 {
@@ -1541,8 +1634,9 @@ _StartOfFunction:
                 }
                 ANYTHING_ELSE
                 {
-                    // FIXME: Emit a U+003C LESS-THAN SIGN character token and a U+002F SOLIDUS character token. Reconsume in the RAWTEXT state.
-                    TODO();
+                    m_queued_tokens.enqueue(HTMLToken::make_character('<'));
+                    m_queued_tokens.enqueue(HTMLToken::make_character('/'));
+                    RECONSUME_IN(RAWTEXT);
                 }
             }
             END_STATE
@@ -1551,17 +1645,34 @@ _StartOfFunction:
             {
                 ON_WHITESPACE
                 {
-                    TODO();
+                    if (!current_end_tag_token_is_appropriate()) {
+                        m_queued_tokens.enqueue(HTMLToken::make_character('<'));
+                        m_queued_tokens.enqueue(HTMLToken::make_character('/'));
+                        for (auto codepoint : m_temporary_buffer)
+                            m_queued_tokens.enqueue(HTMLToken::make_character(codepoint));
+                        RECONSUME_IN(RAWTEXT);
+                    }
+                    SWITCH_TO(BeforeAttributeName);
                 }
                 ON('/')
                 {
-                    TODO();
+                    if (!current_end_tag_token_is_appropriate()) {
+                        m_queued_tokens.enqueue(HTMLToken::make_character('<'));
+                        m_queued_tokens.enqueue(HTMLToken::make_character('/'));
+                        for (auto codepoint : m_temporary_buffer)
+                            m_queued_tokens.enqueue(HTMLToken::make_character(codepoint));
+                        RECONSUME_IN(RAWTEXT);
+                    }
+                    SWITCH_TO(SelfClosingStartTag);
                 }
                 ON('>')
                 {
                     if (!current_end_tag_token_is_appropriate()) {
-                        // FIXME: Otherwise, treat it as per the "anything else" entry below.
-                        TODO();
+                        m_queued_tokens.enqueue(HTMLToken::make_character('<'));
+                        m_queued_tokens.enqueue(HTMLToken::make_character('/'));
+                        for (auto codepoint : m_temporary_buffer)
+                            m_queued_tokens.enqueue(HTMLToken::make_character(codepoint));
+                        RECONSUME_IN(RAWTEXT);
                     }
                     SWITCH_TO_AND_EMIT_CURRENT_TOKEN(Data);
                 }
@@ -1579,7 +1690,11 @@ _StartOfFunction:
                 }
                 ANYTHING_ELSE
                 {
-                    TODO();
+                    m_queued_tokens.enqueue(HTMLToken::make_character('<'));
+                    m_queued_tokens.enqueue(HTMLToken::make_character('/'));
+                    for (auto codepoint : m_temporary_buffer)
+                        m_queued_tokens.enqueue(HTMLToken::make_character(codepoint));
+                    RECONSUME_IN(RAWTEXT);
                 }
             }
             END_STATE
@@ -1592,7 +1707,26 @@ _StartOfFunction:
                 }
                 ON(0)
                 {
-                    TODO();
+                    PARSE_ERROR();
+                    EMIT_CHARACTER("\uFFFD");
+                }
+                ON_EOF
+                {
+                    EMIT_EOF;
+                }
+                ANYTHING_ELSE
+                {
+                    EMIT_CURRENT_CHARACTER;
+                }
+            }
+            END_STATE
+
+            BEGIN_STATE(PLAINTEXT)
+            {
+                ON(0)
+                {
+                    PARSE_ERROR();
+                    EMIT_CHARACTER("\uFFFD");
                 }
                 ON_EOF
                 {

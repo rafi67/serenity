@@ -318,6 +318,9 @@ static bool validate_inode_mmap_prot(const Process& process, int prot, const Ino
         return false;
 
     if (map_shared) {
+        // FIXME: What about readonly filesystem mounts? We cannot make a
+        // decision here without knowing the mount flags, so we would need to
+        // keep a Custody or something from mmap time.
         if ((prot & PROT_WRITE) && !metadata.may_write(process))
             return false;
         InterruptDisabler disabler;
@@ -430,7 +433,8 @@ void* Process::sys$mmap(const Syscall::SC_mmap_params* user_params)
             return (void*)-EBADF;
         if (description->is_directory())
             return (void*)-ENODEV;
-        if ((prot & PROT_READ) && !description->is_readable())
+        // Require read access even when read protection is not requested.
+        if (!description->is_readable())
             return (void*)-EACCES;
         if (map_shared) {
             if ((prot & PROT_WRITE) && !description->is_writable())
@@ -1344,6 +1348,8 @@ Process* Process::create_user_process(Thread*& first_thread, const String& path,
 
     error = process->exec(path, move(arguments), move(environment));
     if (error != 0) {
+        dbg() << "Failed to exec " << path << ": " << error;
+        delete first_thread;
         delete process;
         return nullptr;
     }
@@ -4082,7 +4088,7 @@ int Process::sys$mount(const Syscall::SC_mount_params* user_params)
     auto target = validate_and_copy_string_from_user(params.target);
     auto fs_type = validate_and_copy_string_from_user(params.fs_type);
 
-    if (target.is_null() || fs_type.is_null())
+    if (target.is_null())
         return -EFAULT;
 
     auto description = file_description(source_fd);
@@ -4097,20 +4103,27 @@ int Process::sys$mount(const Syscall::SC_mount_params* user_params)
 
     auto& target_custody = custody_or_error.value();
 
-    RefPtr<FS> fs;
+    if (params.flags & MS_REMOUNT) {
+        // We're not creating a new mount, we're updating an existing one!
+        return VFS::the().remount(target_custody, params.flags & ~MS_REMOUNT);
+    }
 
     if (params.flags & MS_BIND) {
         // We're doing a bind mount.
         if (description.is_null())
             return -EBADF;
-        ASSERT(description->custody());
+        if (!description->custody()) {
+            // We only support bind-mounting inodes, not arbitrary files.
+            return -ENODEV;
+        }
         return VFS::the().bind_mount(*description->custody(), target_custody, params.flags);
     }
+
+    RefPtr<FS> fs;
 
     if (fs_type == "ext2" || fs_type == "Ext2FS") {
         if (description.is_null())
             return -EBADF;
-        ASSERT(description->custody());
         if (!description->file().is_seekable()) {
             dbg() << "mount: this is not a seekable file";
             return -ENODEV;

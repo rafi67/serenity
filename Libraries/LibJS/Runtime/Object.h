@@ -31,6 +31,7 @@
 #include <LibJS/Forward.h>
 #include <LibJS/Runtime/Cell.h>
 #include <LibJS/Runtime/IndexedProperties.h>
+#include <LibJS/Runtime/MarkedValueList.h>
 #include <LibJS/Runtime/PrimitiveString.h>
 #include <LibJS/Runtime/PropertyName.h>
 #include <LibJS/Runtime/Shape.h>
@@ -107,11 +108,16 @@ public:
     IndexedProperties& indexed_properties() { return m_indexed_properties; }
     void set_indexed_property_elements(Vector<Value>&& values) { m_indexed_properties = IndexedProperties(move(values)); }
 
+    Value invoke(const FlyString& property_name, Optional<MarkedValueList> arguments = {});
+
 private:
     virtual Value get_by_index(u32 property_index) const;
     virtual bool put_by_index(u32 property_index, Value);
     bool put_own_property(Object& this_object, const FlyString& property_name, Value, u8 attributes, PutOwnPropertyMode = PutOwnPropertyMode::Put, bool throw_exceptions = true);
     bool put_own_property_by_index(Object& this_object, u32 property_index, Value, u8 attributes, PutOwnPropertyMode = PutOwnPropertyMode::Put, bool throw_exceptions = true);
+
+    Value call_native_property_getter(Object* this_object, Value property) const;
+    void call_native_property_setter(Object* this_object, Value property, Value) const;
 
     void set_shape(Shape&);
     void ensure_shape_is_unique();

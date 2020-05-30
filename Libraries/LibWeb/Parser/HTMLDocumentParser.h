@@ -76,6 +76,8 @@ public:
 
     InsertionMode insertion_mode() const { return m_insertion_mode; }
 
+    static bool is_special_tag(const FlyString& tag_name);
+
 private:
     const char* insertion_mode_name() const;
 
@@ -93,6 +95,7 @@ private:
     void handle_in_table_body(HTMLToken&);
     void handle_in_row(HTMLToken&);
     void handle_in_cell(HTMLToken&);
+    void handle_in_table_text(HTMLToken&);
 
     void stop_parsing() { m_stop_parsing = true; }
 
@@ -112,7 +115,13 @@ private:
     void decrement_script_nesting_level();
     size_t script_nesting_level() const { return m_script_nesting_level; }
     void reset_the_insertion_mode_appropriately();
-    void run_the_adoption_agency_algorithm(HTMLToken&);
+
+    enum AdoptionAgencyAlgorithmOutcome {
+        DoNothing,
+        RunAnyOtherEndTagSteps,
+    };
+
+    AdoptionAgencyAlgorithmOutcome run_the_adoption_agency_algorithm(HTMLToken&);
     void clear_the_stack_back_to_a_table_context();
     void clear_the_stack_back_to_a_table_body_context();
     void clear_the_stack_back_to_a_table_row_context();
@@ -139,6 +148,8 @@ private:
     RefPtr<Document> m_document;
     RefPtr<HTMLHeadElement> m_head_element;
     RefPtr<HTMLFormElement> m_form_element;
+
+    Vector<HTMLToken> m_pending_table_character_tokens;
 };
 
 }

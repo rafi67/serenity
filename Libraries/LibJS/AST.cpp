@@ -76,7 +76,7 @@ Value FunctionDeclaration::execute(Interpreter& interpreter) const
 
 Value FunctionExpression::execute(Interpreter& interpreter) const
 {
-    return ScriptFunction::create(interpreter.global_object(), name(), body(), parameters(), function_length(), interpreter.current_environment());
+    return ScriptFunction::create(interpreter.global_object(), name(), body(), parameters(), function_length(), interpreter.current_environment(), m_is_arrow_function);
 }
 
 Value ExpressionStatement::execute(Interpreter& interpreter) const
@@ -282,9 +282,9 @@ Value ForStatement::execute(Interpreter& interpreter) const
             if (interpreter.exception())
                 return {};
             if (interpreter.should_unwind()) {
-                if (interpreter.should_unwind_until(ScopeType::Continuable)) {
+                if (interpreter.should_unwind_until(ScopeType::Continuable, m_label)) {
                     interpreter.stop_unwind();
-                } else if (interpreter.should_unwind_until(ScopeType::Breakable)) {
+                } else if (interpreter.should_unwind_until(ScopeType::Breakable, m_label)) {
                     interpreter.stop_unwind();
                     break;
                 } else {
@@ -303,9 +303,9 @@ Value ForStatement::execute(Interpreter& interpreter) const
             if (interpreter.exception())
                 return {};
             if (interpreter.should_unwind()) {
-                if (interpreter.should_unwind_until(ScopeType::Continuable)) {
+                if (interpreter.should_unwind_until(ScopeType::Continuable, m_label)) {
                     interpreter.stop_unwind();
-                } else if (interpreter.should_unwind_until(ScopeType::Breakable)) {
+                } else if (interpreter.should_unwind_until(ScopeType::Breakable, m_label)) {
                     interpreter.stop_unwind();
                     break;
                 } else {
@@ -370,9 +370,9 @@ Value ForInStatement::execute(Interpreter& interpreter) const
             if (interpreter.exception())
                 return {};
             if (interpreter.should_unwind()) {
-                if (interpreter.should_unwind_until(ScopeType::Continuable)) {
+                if (interpreter.should_unwind_until(ScopeType::Continuable, m_label)) {
                     interpreter.stop_unwind();
-                } else if (interpreter.should_unwind_until(ScopeType::Breakable)) {
+                } else if (interpreter.should_unwind_until(ScopeType::Breakable, m_label)) {
                     interpreter.stop_unwind();
                     break;
                 } else {
@@ -437,9 +437,9 @@ Value ForOfStatement::execute(Interpreter& interpreter) const
         if (interpreter.exception())
             return {};
         if (interpreter.should_unwind()) {
-            if (interpreter.should_unwind_until(ScopeType::Continuable)) {
+            if (interpreter.should_unwind_until(ScopeType::Continuable, m_label)) {
                 interpreter.stop_unwind();
-            } else if (interpreter.should_unwind_until(ScopeType::Breakable)) {
+            } else if (interpreter.should_unwind_until(ScopeType::Breakable, m_label)) {
                 interpreter.stop_unwind();
                 break;
             } else {
@@ -559,15 +559,12 @@ Reference Identifier::to_reference(Interpreter& interpreter) const
 Reference MemberExpression::to_reference(Interpreter& interpreter) const
 {
     auto object_value = m_object->execute(interpreter);
-    if (object_value.is_empty())
-        return {};
-    auto* object = object_value.to_object(interpreter);
-    if (!object)
+    if (interpreter.exception())
         return {};
     auto property_name = computed_property_name(interpreter);
     if (!property_name.is_valid())
         return {};
-    return { object, property_name };
+    return { object_value, property_name };
 }
 
 Value UnaryExpression::execute(Interpreter& interpreter) const
@@ -1638,7 +1635,7 @@ Value SwitchStatement::execute(Interpreter& interpreter) const
             if (interpreter.exception())
                 return {};
             if (interpreter.should_unwind()) {
-                if (interpreter.should_unwind_until(ScopeType::Breakable)) {
+                if (interpreter.should_unwind_until(ScopeType::Breakable, m_label)) {
                     interpreter.stop_unwind();
                     return {};
                 }
@@ -1658,13 +1655,13 @@ Value SwitchCase::execute(Interpreter& interpreter) const
 
 Value BreakStatement::execute(Interpreter& interpreter) const
 {
-    interpreter.unwind(ScopeType::Breakable);
+    interpreter.unwind(ScopeType::Breakable, m_target_label);
     return js_undefined();
 }
 
 Value ContinueStatement::execute(Interpreter& interpreter) const
 {
-    interpreter.unwind(ScopeType::Continuable);
+    interpreter.unwind(ScopeType::Continuable, m_target_label);
     return js_undefined();
 }
 

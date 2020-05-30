@@ -70,6 +70,12 @@ private:
 };
 
 class Statement : public ASTNode {
+public:
+    const FlyString& label() const { return m_label; }
+    void set_label(FlyString string) { m_label = string; }
+
+protected:
+    FlyString m_label;
 };
 
 class EmptyStatement final : public Statement {
@@ -217,8 +223,9 @@ class FunctionExpression final
 public:
     static bool must_have_name() { return false; }
 
-    FunctionExpression(const FlyString& name, NonnullRefPtr<Statement> body, Vector<Parameter> parameters, i32 function_length, NonnullRefPtrVector<VariableDeclaration> variables)
+    FunctionExpression(const FlyString& name, NonnullRefPtr<Statement> body, Vector<Parameter> parameters, i32 function_length, NonnullRefPtrVector<VariableDeclaration> variables, bool is_arrow_function = false)
         : FunctionNode(name, move(body), move(parameters), function_length, move(variables))
+        , m_is_arrow_function(is_arrow_function)
     {
     }
 
@@ -227,6 +234,8 @@ public:
 
 private:
     virtual const char* class_name() const override { return "FunctionExpression"; }
+
+    bool m_is_arrow_function;
 };
 
 class ErrorExpression final : public Expression {
@@ -1042,22 +1051,36 @@ private:
 
 class BreakStatement final : public Statement {
 public:
-    BreakStatement() { }
+    BreakStatement(FlyString target_label)
+        : m_target_label(target_label)
+    {
+    }
 
     virtual Value execute(Interpreter&) const override;
 
+    const FlyString& target_label() const { return m_target_label; }
+
 private:
     virtual const char* class_name() const override { return "BreakStatement"; }
+
+    FlyString m_target_label;
 };
 
 class ContinueStatement final : public Statement {
 public:
-    ContinueStatement() { }
+    ContinueStatement(FlyString target_label)
+        : m_target_label(target_label)
+    {
+    }
 
     virtual Value execute(Interpreter&) const override;
 
+    const FlyString& target_label() const { return m_target_label; }
+
 private:
     virtual const char* class_name() const override { return "ContinueStatement"; }
+
+    FlyString m_target_label;
 };
 
 class DebuggerStatement final : public Statement {

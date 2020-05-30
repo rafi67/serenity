@@ -67,33 +67,36 @@ String Document::render_for_terminal() const
 template<typename BlockType>
 static bool helper(Vector<StringView>::ConstIterator& lines, NonnullOwnPtrVector<Block>& blocks)
 {
-    NonnullOwnPtr<BlockType> block = make<BlockType>();
-    bool success = block->parse(lines);
-    if (!success)
+    OwnPtr<BlockType> block = BlockType::parse(lines);
+    if (!block)
         return false;
-    blocks.append(move(block));
+    blocks.append(block.release_nonnull());
     return true;
 }
 
-bool Document::parse(const StringView& str)
+OwnPtr<Document> Document::parse(const StringView& str)
 {
     const Vector<StringView> lines_vec = str.lines();
     auto lines = lines_vec.begin();
+    auto document = make<Document>();
+    auto& blocks = document->m_blocks;
 
     while (true) {
         if (lines.is_end())
-            return true;
+            break;
 
         if ((*lines).is_empty()) {
             ++lines;
             continue;
         }
 
-        bool any = helper<List>(lines, m_blocks) || helper<Paragraph>(lines, m_blocks) || helper<CodeBlock>(lines, m_blocks) || helper<Heading>(lines, m_blocks);
+        bool any = helper<List>(lines, blocks) || helper<Paragraph>(lines, blocks) || helper<CodeBlock>(lines, blocks) || helper<Heading>(lines, blocks);
 
         if (!any)
-            return false;
+            return nullptr;
     }
+
+    return document;
 }
 
 }

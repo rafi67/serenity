@@ -37,7 +37,7 @@ public:
     String render_to_html() const;
     String render_for_terminal() const;
 
-    bool parse(const StringView&);
+    static OwnPtr<Document> parse(const StringView&);
 
 private:
     NonnullOwnPtrVector<Block> m_blocks;

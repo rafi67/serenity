@@ -498,12 +498,14 @@ void TextEditor::paint_event(PaintEvent& event)
 
                     painter.fill_rect(selection_rect, background_color);
 
-                    Utf32View visual_selected_text {
-                        visual_line_text.codepoints() + start_of_selection_within_visual_line,
-                        end_of_selection_within_visual_line - start_of_selection_within_visual_line
-                    };
+                    if (visual_line_text.codepoints()) {
+                        Utf32View visual_selected_text {
+                            visual_line_text.codepoints() + start_of_selection_within_visual_line,
+                            end_of_selection_within_visual_line - start_of_selection_within_visual_line
+                        };
 
-                    painter.draw_text(selection_rect, visual_selected_text, Gfx::TextAlignment::CenterLeft, text_color);
+                        painter.draw_text(selection_rect, visual_selected_text, Gfx::TextAlignment::CenterLeft, text_color);
+                    }
                 }
             }
             ++visual_line_index;
@@ -1242,8 +1244,10 @@ void TextEditor::undefer_reflow()
 {
     ASSERT(m_reflow_deferred);
     if (!--m_reflow_deferred) {
-        if (m_reflow_requested)
+        if (m_reflow_requested) {
             recompute_all_visual_lines();
+            scroll_cursor_into_view();
+        }
     }
 }
 

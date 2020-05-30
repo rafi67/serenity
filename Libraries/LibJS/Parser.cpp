@@ -269,6 +269,11 @@ NonnullRefPtr<Statement> Parser::parse_statement()
         consume();
         return create_ast_node<EmptyStatement>();
     default:
+        if (match(TokenType::Identifier)) {
+            auto result = try_parse_labelled_statement();
+            if (!result.is_null())
+                return result.release_nonnull();
+        }
         if (match_expression()) {
             auto expr = parse_expression(0);
             consume_or_insert_semicolon();
@@ -365,7 +370,7 @@ RefPtr<FunctionExpression> Parser::try_parse_arrow_function_expression(bool expe
             // for arrow function bodies which are a single expression.
             // Esprima generates a single "ArrowFunctionExpression"
             // with a "body" property.
-            auto return_expression = parse_expression(0);
+            auto return_expression = parse_expression(2);
             auto return_block = create_ast_node<BlockStatement>();
             return_block->append<ReturnStatement>(move(return_expression));
             return return_block;
@@ -377,10 +382,31 @@ RefPtr<FunctionExpression> Parser::try_parse_arrow_function_expression(bool expe
     if (!function_body_result.is_null()) {
         state_rollback_guard.disarm();
         auto body = function_body_result.release_nonnull();
-        return create_ast_node<FunctionExpression>("", move(body), move(parameters), function_length, m_parser_state.m_var_scopes.take_last());
+        return create_ast_node<FunctionExpression>("", move(body), move(parameters), function_length, m_parser_state.m_var_scopes.take_last(), true);
     }
 
     return nullptr;
+}
+
+RefPtr<Statement> Parser::try_parse_labelled_statement()
+{
+    save_state();
+    ArmedScopeGuard state_rollback_guard = [&] {
+        load_state();
+    };
+
+    auto identifier = consume(TokenType::Identifier).value();
+    if (!match(TokenType::Colon))
+        return {};
+    consume(TokenType::Colon);
+
+    if (!match_statement())
+        return {};
+    auto statement = parse_statement();
+
+    statement->set_label(identifier);
+    state_rollback_guard.disarm();
+    return statement;
 }
 
 NonnullRefPtr<Expression> Parser::parse_primary_expression()
@@ -822,8 +848,7 @@ NonnullRefPtr<Expression> Parser::parse_secondary_expression(NonnullRefPtr<Expre
                 syntax_error(
                     String::format("'%s' cannot be assigned to in strict mode code", name.characters()),
                     m_parser_state.m_current_token.line_number(),
-                    m_parser_state.m_current_token.line_column()
-                );
+                    m_parser_state.m_current_token.line_column());
             }
         }
         return create_ast_node<AssignmentExpression>(AssignmentOp::Assignment, move(lhs), parse_expression(min_precedence, associativity));
@@ -893,8 +918,7 @@ NonnullRefPtr<NewExpression> Parser::parse_new_expression()
 {
     consume(TokenType::New);
 
-    // FIXME: Support full expressions as the callee as well.
-    auto callee = create_ast_node<Identifier>(consume(TokenType::Identifier).value());
+    auto callee = parse_expression(g_operator_precedence.get(TokenType::New).value(), Associativity::Right, { TokenType::ParenOpen });
 
     Vector<CallExpression::Argument> arguments;
 
@@ -1089,25 +1113,37 @@ NonnullRefPtr<ThrowStatement> Parser::parse_throw_statement()
 NonnullRefPtr<BreakStatement> Parser::parse_break_statement()
 {
     consume(TokenType::Break);
+    FlyString target_label;
+    if (match(TokenType::Semicolon)) {
+        consume();
+        return create_ast_node<BreakStatement>(target_label);
+    }
+    if (match(TokenType::Identifier) && !m_parser_state.m_current_token.trivia().contains('\n'))
+        target_label = consume().value();
     consume_or_insert_semicolon();
-    // FIXME: Handle labels. When fixing this, take care to correctly implement semicolon insertion
-    return create_ast_node<BreakStatement>();
+    return create_ast_node<BreakStatement>(target_label);
 }
 
 NonnullRefPtr<ContinueStatement> Parser::parse_continue_statement()
 {
     consume(TokenType::Continue);
+    FlyString target_label;
+    if (match(TokenType::Semicolon)) {
+        consume();
+        return create_ast_node<ContinueStatement>(target_label);
+    }
+    if (match(TokenType::Identifier) && !m_parser_state.m_current_token.trivia().contains('\n'))
+        target_label = consume().value();
     consume_or_insert_semicolon();
-    // FIXME: Handle labels. When fixing this, take care to correctly implement semicolon insertion
-    return create_ast_node<ContinueStatement>();
+    return create_ast_node<ContinueStatement>(target_label);
 }
 
 NonnullRefPtr<ConditionalExpression> Parser::parse_conditional_expression(NonnullRefPtr<Expression> test)
 {
     consume(TokenType::QuestionMark);
-    auto consequent = parse_expression(0);
+    auto consequent = parse_expression(2);
     consume(TokenType::Colon);
-    auto alternate = parse_expression(0);
+    auto alternate = parse_expression(2);
     return create_ast_node<ConditionalExpression>(move(test), move(consequent), move(alternate));
 }
 

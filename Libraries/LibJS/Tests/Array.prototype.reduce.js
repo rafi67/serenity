@@ -31,7 +31,7 @@ try {
         message: "Reduce of empty array with no initial value"
     });
 
-    [1, 2].reduce(() => { assert(this === undefined) });
+    [1, 2].reduce(function () { assert(this === undefined) });
 
     var callbackCalled = 0;
     var callback = () => { callbackCalled++; return true };
@@ -67,8 +67,7 @@ try {
     result = [5, 4, 3, 2, 1].reduce((accum, elem) => accum + elem);
     assert(result === 15);
 
-    // likely parser bug: arrow func parser eats ", 100" as a part of the function, hence the parens  
-    result = [1, 2, 3, 4, 5, 6].reduce(((accum, elem) => accum + elem), 100);
+    result = [1, 2, 3, 4, 5, 6].reduce((accum, elem) => accum + elem, 100);
     assert(result === 121);
 
     result = [6, 5, 4, 3, 2, 1].reduce((accum, elem) => { return accum + elem }, 100);

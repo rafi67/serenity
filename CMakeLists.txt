@@ -20,6 +20,15 @@ add_custom_target(grub-image
     USES_TERMINAL
 )
 
+add_custom_target(lint-shell-scripts
+    COMMAND ${CMAKE_SOURCE_DIR}/Meta/lint-shell-scripts.sh
+    USES_TERMINAL
+)
+add_custom_target(check-style
+    COMMAND ${CMAKE_SOURCE_DIR}/Meta/check-style.sh
+    USES_TERMINAL
+)
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -std=c++2a -fdiagnostics-color=always")
 
 include_directories(Libraries)
@@ -31,7 +40,7 @@ add_subdirectory(DevTools/FormCompiler)
 add_subdirectory(Libraries/LibWeb/CodeGenerators)
 add_subdirectory(AK/Tests)
 
-function(serenity_lib_headers target_name)
+function(serenity_install_headers target_name)
     file(GLOB_RECURSE headers RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.h")
     foreach(header ${headers})
         get_filename_component(subdirectory ${header} DIRECTORY)
@@ -40,7 +49,7 @@ function(serenity_lib_headers target_name)
 endfunction()
 
 function(serenity_lib target_name fs_name)
-    serenity_lib_headers(${target_name})
+    serenity_install_headers(${target_name})
     add_library(${target_name} ${SOURCES} ${GENERATED_SOURCES})
     install(TARGETS ${target_name} ARCHIVE DESTINATION usr/lib)
     set_target_properties(${target_name} PROPERTIES OUTPUT_NAME ${fs_name})
@@ -54,7 +63,7 @@ function(serenity_lib target_name fs_name)
 endfunction()
 
 function(serenity_libc target_name fs_name)
-    serenity_lib_headers("")
+    serenity_install_headers("")
     add_library(${target_name} ${SOURCES})
     install(TARGETS ${target_name} ARCHIVE DESTINATION usr/lib)
     set_target_properties(${target_name} PROPERTIES OUTPUT_NAME ${fs_name})
@@ -112,6 +121,7 @@ include_directories(Services)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/Services)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/Libraries)
 
+add_subdirectory(AK)
 add_subdirectory(Kernel)
 add_subdirectory(Libraries)
 add_subdirectory(Services)

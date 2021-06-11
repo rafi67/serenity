@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Ben Wiederhake <BenWiederhake.GitHub@gmx.de>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <assert.h>
@@ -34,10 +14,11 @@
 
 typedef char assert_size_t_is_int[sizeof(size_t) == 4 ? 1 : -1];
 
-static const char* TEXT_ERROR = "\x1b[01;35m";
-static const char* TEXT_WRONG = "\x1b[01;31m";
-static const char* TEXT_OFBY1 = "\x1b[01;97m";
-static const char* TEXT_RESET = "\x1b[0m";
+static constexpr char TEXT_ERROR[] = "\x1b[01;35m";
+static constexpr char TEXT_WRONG[] = "\x1b[01;31m";
+static constexpr char TEXT_OFBY1[] = "\x1b[01;97m";
+static constexpr char TEXT_RESET[] = "\x1b[0m";
+static constexpr long long LENIENCY = 8;
 
 struct Testcase {
     const char* test_name;
@@ -255,33 +236,33 @@ constexpr size_t NUM_TESTCASES = sizeof(TESTCASES) / sizeof(TESTCASES[0]);
 
 typedef double (*strtod_fn_t)(const char* str, char** endptr);
 
-long long cast_ll(double d)
+static long long cast_ll(double d)
 {
     union readable_t {
         double as_double;
         long long as_ll;
     };
     typedef char assert_double_8bytes[sizeof(double) == 8 ? 1 : -1];
-    (void)sizeof(assert_double_8bytes);
+    [[maybe_unused]] auto double_size = sizeof(assert_double_8bytes);
     typedef char assert_ll_8bytes[sizeof(long long) == 8 ? 1 : -1];
-    (void)sizeof(assert_ll_8bytes);
+    [[maybe_unused]] auto longlong_size = sizeof(assert_ll_8bytes);
     typedef char assert_readable_8bytes[sizeof(readable_t) == 8 ? 1 : -1];
-    (void)sizeof(assert_readable_8bytes);
+    [[maybe_unused]] auto readable8_size = sizeof(assert_readable_8bytes);
     readable_t readable;
     readable.as_double = d;
     return readable.as_ll;
 }
 
-bool is_strtod_close(strtod_fn_t strtod_fn, const char* test_string, const char* expect_hex, int expect_consume, long long expect_ll)
+static bool is_strtod_close(strtod_fn_t strtod_fn, const char* test_string, const char* expect_hex, int expect_consume, long long expect_ll)
 {
     union readable_t {
         double as_double;
         unsigned char as_bytes[8];
     };
     typedef char assert_double_8bytes[sizeof(double) == 8 ? 1 : -1];
-    (void)sizeof(assert_double_8bytes);
+    [[maybe_unused]] auto double_size = sizeof(assert_double_8bytes);
     typedef char assert_readable_8bytes[sizeof(readable_t) == 8 ? 1 : -1];
-    (void)sizeof(assert_readable_8bytes);
+    [[maybe_unused]] auto readable8_size = sizeof(assert_readable_8bytes);
     readable_t readable;
     char* endptr = (char*)0x123;
 
@@ -307,23 +288,25 @@ bool is_strtod_close(strtod_fn_t strtod_fn, const char* test_string, const char*
     long long actual_ll = cast_ll(readable.as_double);
     long long off_by = expect_ll - actual_ll;
 
-    bool ofby1_hex = off_by != 0 && -8 <= off_by && off_by <= 8;
+    bool ofby1_hex = off_by != 0 && -LENIENCY <= off_by && off_by <= LENIENCY;
     bool wrong_hex = !ofby1_hex && strcmp(expect_hex, actual_hex) != 0;
     bool error_cns = !actual_consume_possible;
     bool wrong_cns = !error_cns && (actual_consume != expect_consume);
 
     printf(" %s%s%s(%s%2u%s)",
-        ofby1_hex ? TEXT_OFBY1 : wrong_hex ? TEXT_WRONG : "",
+        ofby1_hex ? TEXT_OFBY1 : wrong_hex ? TEXT_WRONG
+                                           : "",
         actual_hex,
         (ofby1_hex || wrong_hex) ? TEXT_RESET : "",
-        error_cns ? TEXT_ERROR : wrong_cns ? TEXT_WRONG : "",
+        error_cns ? TEXT_ERROR : wrong_cns ? TEXT_WRONG
+                                           : "",
         actual_consume,
         (error_cns || wrong_cns) ? TEXT_RESET : "");
 
     return !(wrong_hex || error_cns || wrong_cns);
 }
 
-long long hex_to_ll(const char* hex)
+static long long hex_to_ll(const char* hex)
 {
     long long result = 0;
     for (int i = 0; i < 16; ++i) {
@@ -374,5 +357,11 @@ int main()
         }
     }
     printf("Out of %lu tests, saw %d successes and %d fails.\n", NUM_TESTCASES, successes, fails);
+    if (fails != 0) {
+        printf("FAIL\n");
+        return 1;
+    }
+
+    printf("PASS (with leniency up to %lld ULP from the exact solution.\n", LENIENCY);
     return 0;
 }

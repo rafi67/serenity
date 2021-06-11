@@ -1,34 +1,14 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-/* 
+/*
  * If linux/types.h is already been included, assume it has defined
- * everything we need.  (cross fingers)  Other header files may have 
+ * everything we need.  (cross fingers)  Other header files may have
  * also defined the types that we need.
  */
 #if (!defined(_LINUX_TYPES_H) && !defined(_BLKID_TYPES_H) && !defined(_EXT2_TYPES_H))
@@ -78,8 +58,8 @@ typedef int __s16;
 #            if (2 == 2)
 typedef short __s16;
 #            else
-        ? == error
-        : undefined 16 bit type
+    ? == error
+    : undefined 16 bit type
 #            endif /* SIZEOF_SHORT == 2 */
 #        endif     /* SIZEOF_INT == 2 */
 #    endif         /* __S16_TYPEDEF */
@@ -94,10 +74,10 @@ typedef unsigned int __u32;
 typedef unsigned long __u32;
 #            else
 #                if (2 == 4)
-        typedef unsigned short __u32;
+    typedef unsigned short __u32;
 #                else
-            ? == error
-            : undefined 32 bit type
+        ? == error
+        : undefined 32 bit type
 #                endif /* SIZEOF_SHORT == 4 */
 #            endif     /* SIZEOF_LONG == 4 */
 #        endif         /* SIZEOF_INT == 4 */
@@ -115,8 +95,8 @@ typedef long __s32;
 #                if (2 == 4)
 typedef short __s32;
 #                else
-                ? == error
-                : undefined 32 bit type
+            ? == error
+            : undefined 32 bit type
 #                endif /* SIZEOF_SHORT == 4 */
 #            endif     /* SIZEOF_LONG == 4 */
 #        endif         /* SIZEOF_INT == 4 */

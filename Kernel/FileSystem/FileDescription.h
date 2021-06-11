@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -38,20 +18,19 @@
 
 namespace Kernel {
 
-class CharacterDevice;
-class File;
-class MasterPTY;
-class Process;
-class Region;
-class Socket;
-class TTY;
+class FileDescriptionData {
+public:
+    virtual ~FileDescriptionData() = default;
+};
 
 class FileDescription : public RefCounted<FileDescription> {
     MAKE_SLAB_ALLOCATED(FileDescription)
 public:
-    static NonnullRefPtr<FileDescription> create(Custody&);
-    static NonnullRefPtr<FileDescription> create(File&);
+    static KResultOr<NonnullRefPtr<FileDescription>> create(Custody&);
+    static KResultOr<NonnullRefPtr<FileDescription>> create(File&);
     ~FileDescription();
+
+    Thread::FileBlocker::BlockFlags should_unblock(Thread::FileBlocker::BlockFlags) const;
 
     bool is_readable() const { return m_readable; }
     bool is_writable() const { return m_writable; }
@@ -65,21 +44,21 @@ public:
         set_writable(options & O_WRONLY);
     }
 
-    int close();
+    KResult close();
 
-    off_t seek(off_t, int whence);
-    ssize_t read(u8*, ssize_t);
-    ssize_t write(const u8* data, ssize_t);
-    KResult fstat(stat&);
+    KResultOr<off_t> seek(off_t, int whence);
+    KResultOr<size_t> read(UserOrKernelBuffer&, size_t);
+    KResultOr<size_t> write(const UserOrKernelBuffer& data, size_t);
+    KResult stat(::stat&);
 
     KResult chmod(mode_t);
 
     bool can_read() const;
     bool can_write() const;
 
-    ssize_t get_dir_entries(u8* buffer, ssize_t);
+    KResultOr<ssize_t> get_dir_entries(UserOrKernelBuffer& buffer, ssize_t);
 
-    KResultOr<ByteBuffer> read_entire_file();
+    KResultOr<NonnullOwnPtr<KBuffer>> read_entire_file();
 
     String absolute_path() const;
 
@@ -98,6 +77,10 @@ public:
     const TTY* tty() const;
     TTY* tty();
 
+    bool is_inode_watcher() const;
+    const InodeWatcher* inode_watcher() const;
+    InodeWatcher* inode_watcher();
+
     bool is_master_pty() const;
     const MasterPTY* master_pty() const;
     MasterPTY* master_pty();
@@ -109,7 +92,7 @@ public:
     Custody* custody() { return m_custody.ptr(); }
     const Custody* custody() const { return m_custody.ptr(); }
 
-    KResultOr<Region*> mmap(Process&, VirtualAddress, size_t offset, size_t, int prot, bool shared);
+    KResultOr<Region*> mmap(Process&, const Range&, u64 offset, int prot, bool shared);
 
     bool is_blocking() const { return m_is_blocking; }
     void set_blocking(bool b) { m_is_blocking = b; }
@@ -125,10 +108,10 @@ public:
 
     bool is_fifo() const;
     FIFO* fifo();
-    FIFO::Direction fifo_direction() { return m_fifo_direction; }
+    FIFO::Direction fifo_direction() const { return m_fifo_direction; }
     void set_fifo_direction(Badge<FIFO>, FIFO::Direction direction) { m_fifo_direction = direction; }
 
-    Optional<KBuffer>& generator_cache() { return m_generator_cache; }
+    OwnPtr<FileDescriptionData>& data() { return m_data; }
 
     void set_original_inode(Badge<VFS>, NonnullRefPtr<Inode>&& inode) { m_inode = move(inode); }
 
@@ -138,10 +121,18 @@ public:
 
     KResult chown(uid_t, gid_t);
 
+    FileBlockCondition& block_condition();
+
 private:
     friend class VFS;
     explicit FileDescription(File&);
-    FileDescription(FIFO&, FIFO::Direction);
+
+    KResult attach();
+
+    void evaluate_block_conditions()
+    {
+        block_condition().unblock();
+    }
 
     RefPtr<Custody> m_custody;
     RefPtr<Inode> m_inode;
@@ -149,7 +140,7 @@ private:
 
     off_t m_current_offset { 0 };
 
-    Optional<KBuffer> m_generator_cache;
+    OwnPtr<FileDescriptionData> m_data;
 
     u32 m_file_flags { 0 };
 

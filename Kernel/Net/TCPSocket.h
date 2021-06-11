@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -30,15 +10,15 @@
 #include <AK/HashMap.h>
 #include <AK/SinglyLinkedList.h>
 #include <AK/WeakPtr.h>
+#include <Kernel/KResult.h>
 #include <Kernel/Net/IPv4Socket.h>
 
 namespace Kernel {
 
-class TCPSocket final : public IPv4Socket
-    , public Weakable<TCPSocket> {
+class TCPSocket final : public IPv4Socket {
 public:
     static void for_each(Function<void(const TCPSocket&)>);
-    static NonnullRefPtr<TCPSocket> create(int protocol);
+    static KResultOr<NonnullRefPtr<TCPSocket>> create(int protocol);
     virtual ~TCPSocket() override;
 
     enum class Direction {
@@ -113,6 +93,7 @@ public:
         FINDuringConnect,
         RSTDuringConnect,
         UnexpectedFlagsDuringConnect,
+        RetransmitTimeout,
     };
 
     static const char* to_string(Error error)
@@ -149,23 +130,34 @@ public:
     u32 packets_out() const { return m_packets_out; }
     u32 bytes_out() const { return m_bytes_out; }
 
-    void send_tcp_packet(u16 flags, const void* = nullptr, size_t = 0);
-    void send_outgoing_packets();
+    // FIXME: Make this configurable?
+    static constexpr u32 maximum_duplicate_acks = 5;
+    void set_duplicate_acks(u32 acks) { m_duplicate_acks = acks; }
+    u32 duplicate_acks() const { return m_duplicate_acks; }
+
+    KResult send_ack(bool allow_duplicate = false);
+    KResult send_tcp_packet(u16 flags, const UserOrKernelBuffer* = nullptr, size_t = 0, RoutingDecision* = nullptr);
     void receive_tcp_packet(const TCPPacket&, u16 size);
+
+    bool should_delay_next_ack() const;
 
     static Lockable<HashMap<IPv4SocketTuple, TCPSocket*>>& sockets_by_tuple();
     static RefPtr<TCPSocket> from_tuple(const IPv4SocketTuple& tuple);
-    static RefPtr<TCPSocket> from_endpoints(const IPv4Address& local_address, u16 local_port, const IPv4Address& peer_address, u16 peer_port);
 
     static Lockable<HashMap<IPv4SocketTuple, RefPtr<TCPSocket>>>& closing_sockets();
 
     RefPtr<TCPSocket> create_client(const IPv4Address& local_address, u16 local_port, const IPv4Address& peer_address, u16 peer_port);
-    void set_originator(TCPSocket& originator) { m_originator = originator.make_weak_ptr(); }
+    void set_originator(TCPSocket& originator) { m_originator = originator; }
     bool has_originator() { return !!m_originator; }
     void release_to_originator();
     void release_for_accept(RefPtr<TCPSocket>);
 
-    virtual void close() override;
+    static Lockable<HashTable<TCPSocket*>>& sockets_for_retransmit();
+    void retransmit_packets();
+
+    virtual KResult close() override;
+
+    virtual bool can_write(const FileDescription&, size_t) const override;
 
 protected:
     void set_direction(Direction direction) { m_direction = direction; }
@@ -178,13 +170,16 @@ private:
 
     virtual void shut_down_for_writing() override;
 
-    virtual int protocol_receive(const KBuffer&, void* buffer, size_t buffer_size, int flags) override;
-    virtual int protocol_send(const void*, size_t) override;
+    virtual KResultOr<size_t> protocol_receive(ReadonlyBytes raw_ipv4_packet, UserOrKernelBuffer& buffer, size_t buffer_size, int flags) override;
+    virtual KResultOr<size_t> protocol_send(const UserOrKernelBuffer&, size_t) override;
     virtual KResult protocol_connect(FileDescription&, ShouldBlock) override;
-    virtual int protocol_allocate_local_port() override;
+    virtual KResultOr<u16> protocol_allocate_local_port() override;
     virtual bool protocol_is_disconnected() const override;
     virtual KResult protocol_bind() override;
-    virtual KResult protocol_listen() override;
+    virtual KResult protocol_listen(bool did_allocate_port) override;
+
+    void enqueue_for_retransmit();
+    void dequeue_for_retransmit();
 
     WeakPtr<TCPSocket> m_originator;
     HashMap<IPv4SocketTuple, NonnullRefPtr<TCPSocket>> m_pending_release_for_accept;
@@ -201,13 +196,28 @@ private:
 
     struct OutgoingPacket {
         u32 ack_number { 0 };
-        ByteBuffer buffer;
+        RefPtr<PacketWithTimestamp> buffer;
+        size_t ipv4_payload_offset;
+        WeakPtr<NetworkAdapter> adapter;
         int tx_counter { 0 };
-        timeval tx_time { 0, 0 };
     };
 
-    Lock m_not_acked_lock { "TCPSocket unacked packets" };
+    mutable Lock m_not_acked_lock { "TCPSocket unacked packets" };
     SinglyLinkedList<OutgoingPacket> m_not_acked;
+    size_t m_not_acked_size { 0 };
+
+    u32 m_duplicate_acks { 0 };
+
+    u32 m_last_ack_number_sent { 0 };
+    Time m_last_ack_sent_time;
+
+    // FIXME: Make this configurable (sysctl)
+    static constexpr u32 maximum_retransmits = 5;
+    Time m_last_retransmit_time;
+    u32 m_retransmit_attempts { 0 };
+
+    // FIXME: Parse window size TCP option from the peer
+    u32 m_send_window_size { 64 * KiB };
 };
 
 }

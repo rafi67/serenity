@@ -1,5 +1,11 @@
-#include <unistd.h>
+/*
+ * Copyright (c) 2018-2020, the SerenityOS developers.
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
 #include <sys/stat.h>
+#include <unistd.h>
 
 int main()
 {

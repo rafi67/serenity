@@ -3,11 +3,19 @@
 set -e
 
 wheel_gid=1
-tty_gid=2
 phys_gid=3
-audio_gid=4
+utmp_gid=5
 window_uid=13
 window_gid=13
+
+CP="cp"
+
+# cp on macOS and BSD systems do not support the -d option.
+# gcp comes with coreutils, which is already a dependency.
+OS="$(uname -s)"
+if [ "$OS" = "Darwin" ] || echo "$OS" | grep -qe 'BSD$'; then
+	CP="gcp"
+fi
 
 die() {
     echo "die: $*"
@@ -18,13 +26,58 @@ if [ "$(id -u)" != 0 ]; then
     die "this script needs to run as root"
 fi
 
-[ -z "$SERENITY_ROOT" ] && die "SERENITY_ROOT is not set"
-[ -d "$SERENITY_ROOT/Base" ] || die "$SERENITY_ROOT/Base doesn't exist"
+[ -z "$SERENITY_SOURCE_DIR" ] && die "SERENITY_SOURCE_DIR is not set"
+[ -d "$SERENITY_SOURCE_DIR/Base" ] || die "$SERENITY_SOURCE_DIR/Base doesn't exist"
 
 umask 0022
 
+printf "installing base system... "
+if command -v rsync >/dev/null; then
+    rsync -aH --inplace "$SERENITY_SOURCE_DIR"/Base/ mnt/
+    rsync -aH --inplace Root/ mnt/
+else
+    echo "Please install rsync to speed up image creation times, falling back to cp for now"
+    $CP -PdR "$SERENITY_SOURCE_DIR"/Base/* mnt/
+    $CP -PdR Root/* mnt/
+fi
+$CP "$SERENITY_SOURCE_DIR"/Toolchain/Local/i686/i686-pc-serenity/lib/libgcc_s.so mnt/usr/lib/
+# If umask was 027 or similar when the repo was cloned,
+# file permissions in Base/ are too restrictive. Restore
+# the permissions needed in the image.
+chmod -R g+rX,o+rX "$SERENITY_SOURCE_DIR"/Base/* mnt/
+
+chmod 660 mnt/etc/WindowServer.ini
+chown $window_uid:$window_gid mnt/etc/WindowServer.ini
+echo "/bin/sh" > mnt/etc/shells
+
+chown 0:$wheel_gid mnt/bin/su
+chown 0:$wheel_gid mnt/bin/passwd
+chown 0:$wheel_gid mnt/bin/ping
+chown 0:$wheel_gid mnt/bin/traceroute
+chown 0:$phys_gid mnt/bin/keymap
+chown 0:$phys_gid mnt/bin/shutdown
+chown 0:$phys_gid mnt/bin/reboot
+chown 0:$wheel_gid mnt/bin/pls
+chown 0:0 mnt/boot/Kernel
+chown 0:0 mnt/res/kernel.map
+chmod 0400 mnt/res/kernel.map
+chmod 0400 mnt/boot/Kernel
+chmod 4750 mnt/bin/su
+chmod 4750 mnt/bin/pls
+chmod 4755 mnt/bin/passwd
+chmod 4755 mnt/bin/ping
+chmod 4755 mnt/bin/traceroute
+chmod 4750 mnt/bin/reboot
+chmod 4750 mnt/bin/shutdown
+chmod 4750 mnt/bin/keymap
+chown 0:$utmp_gid mnt/bin/utmpupdate
+chmod 2755 mnt/bin/utmpupdate
+chmod 600 mnt/etc/shadow
+chmod 755 mnt/res/devel/templates/*.postcreate
+echo "done"
+
 printf "creating initial filesystem structure... "
-for dir in bin etc proc mnt tmp boot mod; do
+for dir in bin etc proc mnt tmp boot mod var/run; do
     mkdir -p mnt/$dir
 done
 chmod 700 mnt/boot
@@ -32,82 +85,18 @@ chmod 700 mnt/mod
 chmod 1777 mnt/tmp
 echo "done"
 
-printf "setting up device nodes... "
-mkdir -p mnt/dev
-mkdir -p mnt/dev/pts
-mknod mnt/dev/fb0 b 29 0
-chmod 660 mnt/dev/fb0
-chown 0:$phys_gid mnt/dev/fb0
-mknod mnt/dev/tty0 c 4 0
-mknod mnt/dev/tty1 c 4 1
-mknod mnt/dev/tty2 c 4 2
-mknod mnt/dev/tty3 c 4 3
-mknod mnt/dev/ttyS0 c 4 64
-mknod mnt/dev/ttyS1 c 4 65
-mknod mnt/dev/ttyS2 c 4 66
-mknod mnt/dev/ttyS3 c 4 67
-for tty in 0 1 2 3 S0 S1 S2 S3; do
-    chmod 620 mnt/dev/tty$tty
-    chown 0:$tty_gid mnt/dev/tty$tty
-done
-mknod mnt/dev/random c 1 8
-mknod mnt/dev/null c 1 3
-mknod mnt/dev/zero c 1 5
-mknod mnt/dev/full c 1 7
-# random, is failing (randomly) on fuse-ext2 on macos :)
-chmod 666 mnt/dev/random || true
-chmod 666 mnt/dev/null
-chmod 666 mnt/dev/zero
-chmod 666 mnt/dev/full
-mknod mnt/dev/keyboard c 85 1
-chmod 440 mnt/dev/keyboard
-chown 0:$phys_gid mnt/dev/keyboard
-mknod mnt/dev/mouse c 10 1
-chmod 440 mnt/dev/mouse
-chown 0:$phys_gid mnt/dev/mouse
-mknod mnt/dev/audio c 42 42
-chmod 220 mnt/dev/audio
-chown 0:$audio_gid mnt/dev/audio
-mknod mnt/dev/ptmx c 5 2
-chmod 666 mnt/dev/ptmx
-mknod mnt/dev/hda b 3 0
-mknod mnt/dev/hdb b 3 1
-mknod mnt/dev/hdc b 4 0
-mknod mnt/dev/hdd b 4 1
-for hd in a b c d; do
-    chmod 600 mnt/dev/hd$hd
-done
-
-ln -s /proc/self/fd/0 mnt/dev/stdin
-ln -s /proc/self/fd/1 mnt/dev/stdout
-ln -s /proc/self/fd/2 mnt/dev/stderr
+printf "creating utmp file... "
+touch mnt/var/run/utmp
+chown 0:$utmp_gid mnt/var/run/utmp
+chmod 664 mnt/var/run/utmp
 echo "done"
 
-printf "installing base system... "
-cp -R "$SERENITY_ROOT"/Base/* mnt/
-cp -R Root/* mnt/
-chmod 400 mnt/res/kernel.map
-
-chmod 660 mnt/etc/WindowServer/WindowServer.ini
-chown $window_uid:$window_gid mnt/etc/WindowServer/WindowServer.ini
-echo "/bin/sh" > mnt/etc/shells
-
-chown 0:$wheel_gid mnt/bin/su
-chown 0:$phys_gid mnt/bin/shutdown
-chown 0:$phys_gid mnt/bin/reboot
-chown 0:0 mnt/boot/Kernel
-chown 0:0 mnt/res/kernel.map
-chmod 0400 mnt/res/kernel.map
-chmod 0400 mnt/boot/Kernel
-chmod 4750 mnt/bin/su
-chmod 4755 mnt/bin/ping
-chmod 4750 mnt/bin/reboot
-chmod 4750 mnt/bin/shutdown
-
+printf "setting up device nodes folder... "
+mkdir -p mnt/dev
 echo "done"
 
 printf "writing version file... "
-GIT_HASH=$( (git log --pretty=format:'%h' -n 1 | head -c 7) || true )
+GIT_HASH=$( (git log --pretty=format:'%h' -n 1 | cut -c1-7) || true )
 printf "[Version]\nMajor=1\nMinor=0\nGit=%s\n" "$GIT_HASH" > mnt/res/version.ini
 echo "done"
 
@@ -117,8 +106,15 @@ mkdir -p mnt/home/anon
 mkdir -p mnt/home/anon/Desktop
 mkdir -p mnt/home/anon/Downloads
 mkdir -p mnt/home/nona
-cp "$SERENITY_ROOT"/ReadMe.md mnt/home/anon/
-cp -r "$SERENITY_ROOT"/Libraries/LibJS/Tests mnt/home/anon/js-tests
+rm -fr mnt/home/anon/js-tests mnt/home/anon/web-tests mnt/home/anon/cpp-tests mnt/home/anon/wasm-tests
+mkdir -p mnt/home/anon/cpp-tests/
+cp "$SERENITY_SOURCE_DIR"/README.md mnt/home/anon/
+cp -r "$SERENITY_SOURCE_DIR"/Userland/Libraries/LibJS/Tests mnt/home/anon/js-tests
+cp -r "$SERENITY_SOURCE_DIR"/Userland/Libraries/LibWeb/Tests mnt/home/anon/web-tests
+cp -r "$SERENITY_SOURCE_DIR"/Userland/DevTools/HackStudio/LanguageServers/Cpp/Tests mnt/home/anon/cpp-tests/comprehension
+cp -r "$SERENITY_SOURCE_DIR"/Userland/Libraries/LibCpp/Tests mnt/home/anon/cpp-tests/parser
+cp -r "$SERENITY_SOURCE_DIR"/Userland/Libraries/LibWasm/Tests mnt/home/anon/wasm-tests
+cp -r "$SERENITY_SOURCE_DIR"/Userland/Libraries/LibJS/Tests/test-common.js mnt/home/anon/wasm-tests
 chmod 700 mnt/root
 chmod 700 mnt/home/anon
 chmod 700 mnt/home/nona
@@ -127,37 +123,27 @@ chown -R 100:100 mnt/home/anon
 chown -R 200:200 mnt/home/nona
 echo "done"
 
+printf "adding some desktop icons... "
+ln -sf /bin/Browser mnt/home/anon/Desktop/
+ln -sf /bin/TextEditor mnt/home/anon/Desktop/Text\ Editor
+ln -sf /bin/Help mnt/home/anon/Desktop/
+ln -sf /home/anon mnt/home/anon/Desktop/Home
+chown -R 100:100 mnt/home/anon/Desktop
+echo "done"
+
 printf "installing shortcuts... "
-ln -s FileManager mnt/bin/fm
-ln -s HelloWorld mnt/bin/hw
-ln -s IRCClient mnt/bin/irc
-ln -s Minesweeper mnt/bin/ms
-ln -s Shell mnt/bin/sh
-ln -s Snake mnt/bin/sn
-ln -s Taskbar mnt/bin/tb
-ln -s VisualBuilder mnt/bin/vb
-ln -s WidgetGallery mnt/bin/wg
-ln -s TextEditor mnt/bin/te
-ln -s HexEditor mnt/bin/he
-ln -s PixelPaint mnt/bin/pp
-ln -s QuickShow mnt/bin/qs
-ln -s Piano mnt/bin/pi
-ln -s SystemDialog mnt/bin/sd
-ln -s Calculator mnt/bin/calc
-ln -s Calendar mnt/bin/calendar
-ln -s Inspector mnt/bin/ins
-ln -s SoundPlayer mnt/bin/sp
-ln -s Help mnt/bin/help
-ln -s Browser mnt/bin/br
-ln -s HackStudio mnt/bin/hs
-ln -s Debugger mnt/bin/sdb
-ln -s SystemMonitor mnt/bin/sm
-ln -s ProfileViewer mnt/bin/pv
-ln -s WebServer mnt/bin/ws
-ln -s Solitaire mnt/bin/sl
+ln -sf Shell mnt/bin/sh
+ln -sf test mnt/bin/[
+echo "done"
+
+printf "installing 'checksum' variants... "
+ln -sf checksum mnt/bin/md5sum
+ln -sf checksum mnt/bin/sha1sum
+ln -sf checksum mnt/bin/sha256sum
+ln -sf checksum mnt/bin/sha512sum
 echo "done"
 
 # Run local sync script, if it exists
-if [ -f sync-local.sh ]; then
-    sh sync-local.sh
+if [ -f "${SERENITY_SOURCE_DIR}/sync-local.sh" ]; then
+    sh "${SERENITY_SOURCE_DIR}/sync-local.sh"
 fi

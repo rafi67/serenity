@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2018-2020, the SerenityOS developers.
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -23,8 +29,13 @@ int main(int, char**)
 
     printf("First thread doing a blocking read from pipe...\n");
     char buffer[16];
-    int nread = read(pipefds[0], buffer, sizeof(buffer));
-    printf("Ok, read %d bytes from pipe\n", nread);
+    ssize_t nread = read(pipefds[0], buffer, sizeof(buffer));
+    if (nread != 0) {
+        printf("FAIL, read %zd bytes from pipe\n", nread);
+        return 1;
+    }
+
+    printf("PASS\n");
 
     return 0;
 }

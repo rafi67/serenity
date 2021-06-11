@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -33,8 +13,8 @@ namespace AK {
 
 class LexicalPath {
 public:
-    LexicalPath() { }
-    explicit LexicalPath(const StringView&);
+    LexicalPath() = default;
+    explicit LexicalPath(String);
 
     bool is_valid() const { return m_is_valid; }
     bool is_absolute() const { return m_is_absolute; }
@@ -49,7 +29,20 @@ public:
 
     bool has_extension(const StringView&) const;
 
-    static String canonicalized_path(const StringView&);
+    void append(String const& component);
+
+    static String canonicalized_path(String);
+    static String relative_path(String absolute_path, String const& prefix);
+
+    template<typename... S>
+    static LexicalPath join(String const& first, S&&... rest)
+    {
+        StringBuilder builder;
+        builder.append(first);
+        ((builder.append('/'), builder.append(forward<S>(rest))), ...);
+
+        return LexicalPath { builder.to_string() };
+    }
 
 private:
     void canonicalize();
@@ -62,6 +55,14 @@ private:
     String m_extension;
     bool m_is_valid { false };
     bool m_is_absolute { false };
+};
+
+template<>
+struct Formatter<LexicalPath> : Formatter<StringView> {
+    void format(FormatBuilder& builder, const LexicalPath& value)
+    {
+        Formatter<StringView>::format(builder, value.string());
+    }
 };
 
 };

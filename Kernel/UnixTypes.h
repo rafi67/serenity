@@ -1,31 +1,12 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/DistinctNumeric.h>
 #include <AK/Types.h>
 
 #define O_RDONLY (1 << 0)
@@ -55,14 +36,40 @@
 #define MS_RDONLY (1 << 4)
 #define MS_REMOUNT (1 << 5)
 
-#define PERF_EVENT_MALLOC 1
-#define PERF_EVENT_FREE 2
+enum {
+    _SC_MONOTONIC_CLOCK,
+    _SC_NPROCESSORS_CONF,
+    _SC_NPROCESSORS_ONLN,
+    _SC_OPEN_MAX,
+    _SC_TTY_NAME_MAX,
+    _SC_PAGESIZE,
+    _SC_GETPW_R_SIZE_MAX,
+    _SC_CLK_TCK,
+};
+
+enum {
+    PERF_EVENT_SAMPLE = 1,
+    PERF_EVENT_MALLOC = 2,
+    PERF_EVENT_FREE = 4,
+    PERF_EVENT_MMAP = 8,
+    PERF_EVENT_MUNMAP = 16,
+    PERF_EVENT_PROCESS_CREATE = 32,
+    PERF_EVENT_PROCESS_EXEC = 64,
+    PERF_EVENT_PROCESS_EXIT = 128,
+    PERF_EVENT_THREAD_CREATE = 256,
+    PERF_EVENT_THREAD_EXIT = 512,
+    PERF_EVENT_CONTEXT_SWITCH = 1024,
+    PERF_EVENT_KMALLOC = 2048,
+    PERF_EVENT_KFREE = 4096,
+    PERF_EVENT_PAGE_FAULT = 8192,
+};
 
 #define WNOHANG 1
 #define WUNTRACED 2
 #define WSTOPPED WUNTRACED
 #define WEXITED 4
 #define WCONTINUED 8
+#define WNOWAIT 0x1000000
 
 #define R_OK 4
 #define W_OK 2
@@ -83,7 +90,8 @@
 #define MAP_ANONYMOUS 0x20
 #define MAP_ANON MAP_ANONYMOUS
 #define MAP_STACK 0x40
-#define MAP_PURGEABLE 0x80
+#define MAP_NORESERVE 0x80
+#define MAP_RANDOMIZED 0x100
 
 #define PROT_READ 0x1
 #define PROT_WRITE 0x2
@@ -94,8 +102,6 @@
 #define MADV_SET_NONVOLATILE 0x200
 #define MADV_GET_VOLATILE 0x400
 
-#define MAP_INHERIT_ZERO 1
-
 #define F_DUPFD 0
 #define F_GETFD 1
 #define F_SETFD 2
@@ -105,8 +111,69 @@
 
 #define FD_CLOEXEC 1
 
+#define _FUTEX_OP_SHIFT_OP 28
+#define _FUTEX_OP_MASK_OP 0xf
+#define _FUTEX_OP_SHIFT_CMP 24
+#define _FUTEX_OP_MASK_CMP 0xf
+#define _FUTEX_OP_SHIFT_OP_ARG 12
+#define _FUTEX_OP_MASK_OP_ARG 0xfff
+#define _FUTEX_OP_SHIFT_CMP_ARG 0
+#define _FUTEX_OP_MASK_CMP_ARG 0xfff
+
+#define _FUTEX_OP(val3) (((val3) >> _FUTEX_OP_SHIFT_OP) & _FUTEX_OP_MASK_OP)
+#define _FUTEX_CMP(val3) (((val3) >> _FUTEX_OP_SHIFT_CMP) & _FUTEX_OP_MASK_CMP)
+#define _FUTEX_OP_ARG(val3) (((val3) >> _FUTEX_OP_SHIFT_OP_ARG) & _FUTEX_OP_MASK_OP_ARG)
+#define _FUTEX_CMP_ARG(val3) (((val3) >> _FUTEX_OP_SHIFT_CMP_ARG) & _FUTEX_OP_MASK_CMP_ARG)
+
+#define FUTEX_OP_SET 0
+#define FUTEX_OP_ADD 1
+#define FUTEX_OP_OR 2
+#define FUTEX_OP_ANDN 3
+#define FUTEX_OP_XOR 4
+#define FUTEX_OP_ARG_SHIFT 8
+
+#define FUTEX_OP_CMP_EQ 0
+#define FUTEX_OP_CMP_NE 1
+#define FUTEX_OP_CMP_LT 2
+#define FUTEX_OP_CMP_LE 3
+#define FUTEX_OP_CMP_GT 4
+#define FUTEX_OP_CMP_GE 5
+
 #define FUTEX_WAIT 1
 #define FUTEX_WAKE 2
+#define FUTEX_REQUEUE 3
+#define FUTEX_CMP_REQUEUE 4
+#define FUTEX_WAKE_OP 5
+#define FUTEX_WAIT_BITSET 9
+#define FUTEX_WAKE_BITSET 10
+
+#define FUTEX_PRIVATE_FLAG (1 << 7)
+#define FUTEX_CLOCK_REALTIME (1 << 8)
+#define FUTEX_CMD_MASK ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME)
+
+#define FUTEX_BITSET_MATCH_ANY 0xffffffff
+
+#define S_IFMT 0170000
+#define S_IFDIR 0040000
+#define S_IFCHR 0020000
+#define S_IFBLK 0060000
+#define S_IFREG 0100000
+#define S_IFIFO 0010000
+#define S_IFLNK 0120000
+#define S_IFSOCK 0140000
+
+#define S_ISUID 04000
+#define S_ISGID 02000
+#define S_ISVTX 01000
+#define S_IRUSR 0400
+#define S_IWUSR 0200
+#define S_IXUSR 0100
+#define S_IRGRP 0040
+#define S_IWGRP 0020
+#define S_IXGRP 0010
+#define S_IROTH 0004
+#define S_IWOTH 0002
+#define S_IXOTH 0001
 
 /* c_cc characters */
 #define VINTR 0
@@ -126,6 +193,7 @@
 #define VWERASE 14
 #define VLNEXT 15
 #define VEOL2 16
+#define VINFO 17
 
 /* c_iflag bits */
 #define IGNBRK 0000001
@@ -292,6 +360,11 @@ typedef u32 gid_t;
 typedef u32 clock_t;
 typedef u32 socklen_t;
 typedef int pid_t;
+// Avoid interference with AK/Types.h and LibC/sys/types.h by defining *separate* names:
+TYPEDEF_DISTINCT_ORDERED_ID(pid_t, ProcessID);
+TYPEDEF_DISTINCT_ORDERED_ID(pid_t, ThreadID);
+TYPEDEF_DISTINCT_ORDERED_ID(pid_t, SessionID);
+TYPEDEF_DISTINCT_ORDERED_ID(pid_t, ProcessGroupID);
 
 struct tms {
     clock_t tms_utime;
@@ -345,9 +418,7 @@ struct sigaction {
 #define CLD_STOPPED 4
 #define CLD_CONTINUED 5
 
-#define OFF_T_MAX 2147483647
-
-typedef ssize_t off_t;
+typedef i64 off_t;
 typedef i64 time_t;
 
 struct utimbuf {
@@ -374,28 +445,34 @@ struct termios {
     speed_t c_ospeed;
 };
 
+struct timespec {
+    time_t tv_sec; /* Seconds */
+    long tv_nsec;  /* Nanoseconds */
+};
+
 struct stat {
-    dev_t st_dev;         /* ID of device containing file */
-    ino_t st_ino;         /* inode number */
-    mode_t st_mode;       /* protection */
-    nlink_t st_nlink;     /* number of hard links */
-    uid_t st_uid;         /* user ID of owner */
-    gid_t st_gid;         /* group ID of owner */
-    dev_t st_rdev;        /* device ID (if special file) */
-    off_t st_size;        /* total size, in bytes */
-    blksize_t st_blksize; /* blocksize for file system I/O */
-    blkcnt_t st_blocks;   /* number of 512B blocks allocated */
-    time_t st_atime;      /* time of last access */
-    time_t st_mtime;      /* time of last modification */
-    time_t st_ctime;      /* time of last status change */
+    dev_t st_dev;            /* ID of device containing file */
+    ino_t st_ino;            /* inode number */
+    mode_t st_mode;          /* protection */
+    nlink_t st_nlink;        /* number of hard links */
+    uid_t st_uid;            /* user ID of owner */
+    gid_t st_gid;            /* group ID of owner */
+    dev_t st_rdev;           /* device ID (if special file) */
+    off_t st_size;           /* total size, in bytes */
+    blksize_t st_blksize;    /* blocksize for file system I/O */
+    blkcnt_t st_blocks;      /* number of 512B blocks allocated */
+    struct timespec st_atim; /* time of last access */
+    struct timespec st_mtim; /* time of last modification */
+    struct timespec st_ctim; /* time of last status change */
 };
 
 #define POLLIN (1u << 0)
-#define POLLPRI (1u << 2)
-#define POLLOUT (1u << 3)
-#define POLLERR (1u << 4)
-#define POLLHUP (1u << 5)
-#define POLLNVAL (1u << 6)
+#define POLLPRI (1u << 1)
+#define POLLOUT (1u << 2)
+#define POLLERR (1u << 3)
+#define POLLHUP (1u << 4)
+#define POLLNVAL (1u << 5)
+#define POLLRDHUP (1u << 13)
 
 struct pollfd {
     int fd;
@@ -422,17 +499,31 @@ struct pollfd {
 #define SHUT_WR 2
 #define SHUT_RDWR 3
 
+#define MSG_TRUNC 0x1
+#define MSG_CTRUNC 0x2
+#define MSG_PEEK 0x4
+#define MSG_OOB 0x8
 #define MSG_DONTWAIT 0x40
 
 #define SOL_SOCKET 1
 
-#define SO_RCVTIMEO 1
-#define SO_SNDTIMEO 2
-#define SO_KEEPALIVE 3
-#define SO_ERROR 4
-#define SO_PEERCRED 5
-#define SO_REUSEADDR 6
-#define SO_BINDTODEVICE 7
+enum {
+    SO_RCVTIMEO,
+    SO_SNDTIMEO,
+    SO_TYPE,
+    SO_ERROR,
+    SO_PEERCRED,
+    SO_RCVBUF,
+    SO_SNDBUF,
+    SO_REUSEADDR,
+    SO_BINDTODEVICE,
+    SO_KEEPALIVE,
+    SO_TIMESTAMP,
+};
+
+enum {
+    SCM_TIMESTAMP,
+};
 
 #define IPPROTO_IP 0
 #define IPPROTO_ICMP 1
@@ -440,6 +531,9 @@ struct pollfd {
 #define IPPROTO_UDP 17
 
 #define IP_TTL 2
+#define IP_MULTICAST_LOOP 3
+#define IP_ADD_MEMBERSHIP 4
+#define IP_DROP_MEMBERSHIP 5
 
 struct ucred {
     pid_t pid;
@@ -463,6 +557,7 @@ struct sockaddr_un {
 struct in_addr {
     uint32_t s_addr;
 };
+typedef uint32_t in_addr_t;
 
 struct sockaddr_in {
     int16_t sin_family;
@@ -470,6 +565,15 @@ struct sockaddr_in {
     struct in_addr sin_addr;
     char sin_zero[8];
 };
+
+struct ip_mreq {
+    struct in_addr imr_multiaddr;
+    struct in_addr imr_interface;
+};
+
+#define INADDR_ANY ((in_addr_t)0)
+#define INADDR_NONE ((in_addr_t)-1)
+#define INADDR_LOOPBACK 0x7f000001
 
 typedef u32 __u32;
 typedef u16 __u16;
@@ -485,11 +589,6 @@ struct timeval {
     suseconds_t tv_usec;
 };
 
-struct timespec {
-    time_t tv_sec;
-    long tv_nsec;
-};
-
 typedef enum {
     P_ALL = 1,
     P_PID,
@@ -500,6 +599,9 @@ typedef int clockid_t;
 
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
+#define CLOCK_MONOTONIC_RAW 4
+#define CLOCK_REALTIME_COARSE 5
+#define CLOCK_MONOTONIC_COARSE 6
 #define TIMER_ABSTIME 99
 
 #define UTSNAME_ENTRY_LEN 65
@@ -512,15 +614,25 @@ struct utsname {
     char machine[UTSNAME_ENTRY_LEN];
 };
 
-struct [[gnu::packed]] FarPtr
-{
-    u32 offset { 0 };
-    u16 selector { 0 };
-};
-
 struct iovec {
     void* iov_base;
     size_t iov_len;
+};
+
+struct cmsghdr {
+    socklen_t cmsg_len;
+    int cmsg_level;
+    int cmsg_type;
+};
+
+struct msghdr {
+    void* msg_name;
+    socklen_t msg_namelen;
+    struct iovec* msg_iov;
+    int msg_iovlen;
+    void* msg_control;
+    socklen_t msg_controllen;
+    int msg_flags;
 };
 
 struct sched_param {
@@ -543,6 +655,7 @@ struct ifreq {
         void* ifru_data;
         unsigned int ifru_index;
     } ifr_ifru;
+
 #define ifr_addr ifr_ifru.ifru_addr           // address
 #define ifr_dstaddr ifr_ifru.ifru_dstaddr     // other end of p-to-p link
 #define ifr_broadaddr ifr_ifru.ifru_broadaddr // broadcast address
@@ -573,6 +686,7 @@ struct rtentry {
 #define RTF_GATEWAY 0x2 /* the route is a gateway and not an end host */
 
 #define AT_FDCWD -100
+#define AT_SYMLINK_NOFOLLOW 0x100
 
 #define PURGE_ALL_VOLATILE 0x1
 #define PURGE_ALL_CLEAN_INODE 0x2
@@ -586,3 +700,49 @@ struct rtentry {
 #define PT_PEEK 7
 #define PT_POKE 8
 #define PT_SETREGS 9
+#define PT_POKEDEBUG 10
+#define PT_PEEKDEBUG 11
+
+// Used in struct dirent
+enum {
+    DT_UNKNOWN = 0,
+#define DT_UNKNOWN DT_UNKNOWN
+    DT_FIFO = 1,
+#define DT_FIFO DT_FIFO
+    DT_CHR = 2,
+#define DT_CHR DT_CHR
+    DT_DIR = 4,
+#define DT_DIR DT_DIR
+    DT_BLK = 6,
+#define DT_BLK DT_BLK
+    DT_REG = 8,
+#define DT_REG DT_REG
+    DT_LNK = 10,
+#define DT_LNK DT_LNK
+    DT_SOCK = 12,
+#define DT_SOCK DT_SOCK
+    DT_WHT = 14
+#define DT_WHT DT_WHT
+};
+
+typedef uint64_t fsblkcnt_t;
+typedef uint64_t fsfilcnt_t;
+
+#define ST_RDONLY 0x1
+#define ST_NOSUID 0x2
+
+struct statvfs {
+    unsigned long f_bsize;
+    unsigned long f_frsize;
+    fsblkcnt_t f_blocks;
+    fsblkcnt_t f_bfree;
+    fsblkcnt_t f_bavail;
+
+    fsfilcnt_t f_files;
+    fsfilcnt_t f_ffree;
+    fsfilcnt_t f_favail;
+
+    unsigned long f_fsid;
+    unsigned long f_flag;
+    unsigned long f_namemax;
+};

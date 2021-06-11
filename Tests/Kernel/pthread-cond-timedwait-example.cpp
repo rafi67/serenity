@@ -1,25 +1,30 @@
+/*
+ * Copyright (c) 2018-2020, the SerenityOS developers.
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+#include <cassert>
+#include <cstring>
+#include <ctime>
+#include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <pthread.h>
-#include <errno.h>
 #include <unistd.h>
-#include <ctime>
-#include <cstring>
-#include <cassert>
 
-struct worker_t
-{
-    const char*     name;
-    int             count;
-    pthread_t       thread;
+struct worker_t {
+    const char* name;
+    int count;
+    pthread_t thread;
     pthread_mutex_t lock;
-    pthread_cond_t  cond;
-    long int        wait_time;
+    pthread_cond_t cond;
+    long int wait_time;
 };
 
-void* run_worker(void* args)
+static void* run_worker(void* args)
 {
-    struct timespec time_to_wait = {0, 0};
+    struct timespec time_to_wait = { 0, 0 };
     worker_t* worker = (worker_t*)args;
     worker->count = 0;
 
@@ -40,7 +45,7 @@ void* run_worker(void* args)
     return nullptr;
 }
 
-void init_worker(worker_t* worker, const char* name, long int wait_time)
+static void init_worker(worker_t* worker, const char* name, long int wait_time)
 {
     worker->name = name;
     worker->wait_time = wait_time;
@@ -51,7 +56,7 @@ void init_worker(worker_t* worker, const char* name, long int wait_time)
 
     pthread_mutex_init(&worker->lock, nullptr);
     pthread_cond_init(&worker->cond, nullptr);
-    pthread_create(&worker->thread, &attr, &run_worker, (void*) worker);
+    pthread_create(&worker->thread, &attr, &run_worker, (void*)worker);
 
     pthread_attr_destroy(&attr);
 }

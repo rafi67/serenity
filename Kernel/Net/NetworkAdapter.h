@@ -1,52 +1,47 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/ByteBuffer.h>
 #include <AK/Function.h>
+#include <AK/IntrusiveList.h>
 #include <AK/MACAddress.h>
-#include <AK/SinglyLinkedList.h>
 #include <AK/Types.h>
 #include <AK/WeakPtr.h>
 #include <AK/Weakable.h>
 #include <Kernel/KBuffer.h>
 #include <Kernel/Net/ARP.h>
+#include <Kernel/Net/EthernetFrameHeader.h>
 #include <Kernel/Net/ICMP.h>
 #include <Kernel/Net/IPv4.h>
+#include <Kernel/PCI/Definitions.h>
+#include <Kernel/UserOrKernelBuffer.h>
 
 namespace Kernel {
 
 class NetworkAdapter;
 
-class NetworkAdapter : public RefCounted<NetworkAdapter> {
+using NetworkByteBuffer = AK::Detail::ByteBuffer<1500>;
+
+struct PacketWithTimestamp : public RefCounted<PacketWithTimestamp> {
+    PacketWithTimestamp(KBuffer buffer, Time timestamp)
+        : buffer(move(buffer))
+        , timestamp(timestamp)
+    {
+    }
+
+    KBuffer buffer;
+    Time timestamp;
+    IntrusiveListNode<PacketWithTimestamp, RefPtr<PacketWithTimestamp>> packet_node;
+};
+
+class NetworkAdapter : public RefCounted<NetworkAdapter>
+    , public Weakable<NetworkAdapter> {
 public:
-    static void for_each(Function<void(NetworkAdapter&)>);
-    static RefPtr<NetworkAdapter> from_ipv4_address(const IPv4Address&);
-    static RefPtr<NetworkAdapter> lookup_by_name(const StringView&);
     virtual ~NetworkAdapter();
 
     virtual const char* class_name() const = 0;
@@ -55,6 +50,7 @@ public:
     MACAddress mac_address() { return m_mac_address; }
     IPv4Address ipv4_address() const { return m_ipv4_address; }
     IPv4Address ipv4_netmask() const { return m_ipv4_netmask; }
+    IPv4Address ipv4_broadcast() const { return IPv4Address { (m_ipv4_address.to_u32() & m_ipv4_netmask.to_u32()) | ~m_ipv4_netmask.to_u32() }; }
     IPv4Address ipv4_gateway() const { return m_ipv4_gateway; }
     virtual bool link_up() { return false; }
 
@@ -63,10 +59,9 @@ public:
     void set_ipv4_gateway(const IPv4Address&);
 
     void send(const MACAddress&, const ARPPacket&);
-    void send_ipv4(const MACAddress&, const IPv4Address&, IPv4Protocol, const u8* payload, size_t payload_size, u8 ttl);
-    void send_ipv4_fragmented(const MACAddress&, const IPv4Address&, IPv4Protocol, const u8* payload, size_t payload_size, u8 ttl);
+    void fill_in_ipv4_header(PacketWithTimestamp&, IPv4Address const&, MACAddress const&, IPv4Address const&, IPv4Protocol, size_t, u8);
 
-    size_t dequeue_packet(u8* buffer, size_t buffer_size);
+    size_t dequeue_packet(u8* buffer, size_t buffer_size, Time& packet_timestamp);
 
     bool has_queued_packets() const { return !m_packet_queue.is_empty(); }
 
@@ -78,23 +73,39 @@ public:
     u32 packets_out() const { return m_packets_out; }
     u32 bytes_out() const { return m_bytes_out; }
 
+    RefPtr<PacketWithTimestamp> acquire_packet_buffer(size_t);
+    void release_packet_buffer(PacketWithTimestamp&);
+
+    constexpr size_t layer3_payload_offset() const { return sizeof(EthernetFrameHeader); }
+    constexpr size_t ipv4_payload_offset() const { return layer3_payload_offset() + sizeof(IPv4Packet); }
+
     Function<void()> on_receive;
+
+    void send_packet(ReadonlyBytes);
 
 protected:
     NetworkAdapter();
-    void set_interface_name(const StringView& basename);
+    void set_interface_name(const PCI::Address&);
     void set_mac_address(const MACAddress& mac_address) { m_mac_address = mac_address; }
-    virtual void send_raw(const u8*, size_t) = 0;
-    void did_receive(const u8*, size_t);
+    void did_receive(ReadonlyBytes);
+    virtual void send_raw(ReadonlyBytes) = 0;
+
+    void set_loopback_name();
 
 private:
     MACAddress m_mac_address;
     IPv4Address m_ipv4_address;
     IPv4Address m_ipv4_netmask;
     IPv4Address m_ipv4_gateway;
-    SinglyLinkedList<KBuffer> m_packet_queue;
-    SinglyLinkedList<KBuffer> m_unused_packet_buffers;
-    size_t m_unused_packet_buffers_count { 0 };
+
+    // FIXME: Make this configurable
+    static constexpr size_t max_packet_buffers = 1024;
+
+    using PacketList = IntrusiveList<PacketWithTimestamp, RefPtr<PacketWithTimestamp>, &PacketWithTimestamp::packet_node>;
+
+    PacketList m_packet_queue;
+    size_t m_packet_queue_size { 0 };
+    PacketList m_unused_packets;
     String m_name;
     u32 m_packets_in { 0 };
     u32 m_bytes_in { 0 };

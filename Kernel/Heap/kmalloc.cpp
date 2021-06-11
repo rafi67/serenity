@@ -1,27 +1,7 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 /*
@@ -30,142 +10,260 @@
  */
 
 #include <AK/Assertions.h>
-#include <AK/Bitmap.h>
-#include <AK/Optional.h>
+#include <AK/NonnullOwnPtrVector.h>
 #include <AK/Types.h>
-#include <Kernel/Arch/i386/CPU.h>
+#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Debug.h>
+#include <Kernel/Heap/Heap.h>
 #include <Kernel/Heap/kmalloc.h>
 #include <Kernel/KSyms.h>
+#include <Kernel/Panic.h>
+#include <Kernel/PerformanceManager.h>
 #include <Kernel/Process.h>
 #include <Kernel/Scheduler.h>
+#include <Kernel/SpinLock.h>
 #include <Kernel/StdLib.h>
+#include <Kernel/VM/MemoryManager.h>
 
-#define SANITIZE_KMALLOC
+#define CHUNK_SIZE 32
+#define POOL_SIZE (2 * MiB)
+#define ETERNAL_RANGE_SIZE (2 * MiB)
 
-struct AllocationHeader {
-    size_t allocation_size_in_chunks;
-    u8 data[0];
+static RecursiveSpinLock s_lock; // needs to be recursive because of dump_backtrace()
+
+static void kmalloc_allocate_backup_memory();
+
+struct KmallocGlobalHeap {
+    struct ExpandGlobalHeap {
+        KmallocGlobalHeap& m_global_heap;
+
+        ExpandGlobalHeap(KmallocGlobalHeap& global_heap)
+            : m_global_heap(global_heap)
+        {
+        }
+
+        bool m_adding { false };
+        bool add_memory(size_t allocation_request)
+        {
+            if (!MemoryManager::is_initialized()) {
+                if constexpr (KMALLOC_DEBUG) {
+                    dmesgln("kmalloc: Cannot expand heap before MM is initialized!");
+                }
+                return false;
+            }
+            VERIFY(!m_adding);
+            TemporaryChange change(m_adding, true);
+            // At this point we have very little memory left. Any attempt to
+            // kmalloc() could fail, so use our backup memory first, so we
+            // can't really reliably allocate even a new region of memory.
+            // This is why we keep a backup region, which we can
+            auto region = move(m_global_heap.m_backup_memory);
+            if (!region) {
+                // Be careful to not log too much here. We don't want to trigger
+                // any further calls to kmalloc(). We're already out of memory
+                // and don't have any backup memory, either!
+                if constexpr (KMALLOC_DEBUG) {
+                    dmesgln("kmalloc: Cannot expand heap: no backup memory");
+                }
+                return false;
+            }
+
+            // At this point we should have at least enough memory from the
+            // backup region to be able to log properly
+            if constexpr (KMALLOC_DEBUG) {
+                dmesgln("kmalloc: Adding memory to heap at {}, bytes: {}", region->vaddr(), region->size());
+            }
+
+            auto& subheap = m_global_heap.m_heap.add_subheap(region->vaddr().as_ptr(), region->size());
+            m_global_heap.m_subheap_memory.append(region.release_nonnull());
+
+            // Since we pulled in our backup heap, make sure we allocate another
+            // backup heap before returning. Otherwise we potentially lose
+            // the ability to expand the heap next time we get called.
+            ScopeGuard guard([&]() {
+                // We may need to defer allocating backup memory because the
+                // heap expansion may have been triggered while holding some
+                // other spinlock. If the expansion happens to need the same
+                // spinlock we would deadlock. So, if we're in any lock, defer
+                Processor::current().deferred_call_queue(kmalloc_allocate_backup_memory);
+            });
+
+            // Now that we added our backup memory, check if the backup heap
+            // was big enough to likely satisfy the request
+            if (subheap.free_bytes() < allocation_request) {
+                // Looks like we probably need more
+                size_t memory_size = page_round_up(decltype(m_global_heap.m_heap)::calculate_memory_for_bytes(allocation_request));
+                // Add some more to the new heap. We're already using it for other
+                // allocations not including the original allocation_request
+                // that triggered heap expansion. If we don't allocate
+                memory_size += 1 * MiB;
+                region = MM.allocate_kernel_region(memory_size, "kmalloc subheap", Region::Access::Read | Region::Access::Write, AllocationStrategy::AllocateNow);
+                if (region) {
+                    dbgln("kmalloc: Adding even more memory to heap at {}, bytes: {}", region->vaddr(), region->size());
+
+                    m_global_heap.m_heap.add_subheap(region->vaddr().as_ptr(), region->size());
+                    m_global_heap.m_subheap_memory.append(region.release_nonnull());
+                } else {
+                    dbgln("kmalloc: Could not expand heap to satisfy allocation of {} bytes", allocation_request);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        bool remove_memory(void* memory)
+        {
+            // This is actually relatively unlikely to happen, because it requires that all
+            // allocated memory in a subheap to be freed. Only then the subheap can be removed...
+            for (size_t i = 0; i < m_global_heap.m_subheap_memory.size(); i++) {
+                if (m_global_heap.m_subheap_memory[i].vaddr().as_ptr() == memory) {
+                    auto region = m_global_heap.m_subheap_memory.take(i);
+                    if (!m_global_heap.m_backup_memory) {
+                        if constexpr (KMALLOC_DEBUG) {
+                            dmesgln("kmalloc: Using removed memory as backup: {}, bytes: {}", region->vaddr(), region->size());
+                        }
+                        m_global_heap.m_backup_memory = move(region);
+                    } else {
+                        if constexpr (KMALLOC_DEBUG) {
+                            dmesgln("kmalloc: Queue removing memory from heap at {}, bytes: {}", region->vaddr(), region->size());
+                        }
+                        Processor::deferred_call_queue([this, region = move(region)]() mutable {
+                            // We need to defer freeing the region to prevent a potential
+                            // deadlock since we are still holding the kmalloc lock
+                            // We don't really need to do anything other than holding
+                            // onto the region. Unless we already used the backup
+                            // memory, in which case we want to use the region as the
+                            // new backup.
+                            ScopedSpinLock lock(s_lock);
+                            if (!m_global_heap.m_backup_memory) {
+                                if constexpr (KMALLOC_DEBUG) {
+                                    dmesgln("kmalloc: Queued memory region at {}, bytes: {} will be used as new backup", region->vaddr(), region->size());
+                                }
+                                m_global_heap.m_backup_memory = move(region);
+                            } else {
+                                if constexpr (KMALLOC_DEBUG) {
+                                    dmesgln("kmalloc: Queued memory region at {}, bytes: {} will be freed now", region->vaddr(), region->size());
+                                }
+                            }
+                        });
+                    }
+                    return true;
+                }
+            }
+
+            if constexpr (KMALLOC_DEBUG) {
+                dmesgln("kmalloc: Cannot remove memory from heap: {}", VirtualAddress(memory));
+            }
+            return false;
+        }
+    };
+    typedef ExpandableHeap<CHUNK_SIZE, KMALLOC_SCRUB_BYTE, KFREE_SCRUB_BYTE, ExpandGlobalHeap> HeapType;
+
+    HeapType m_heap;
+    NonnullOwnPtrVector<Region> m_subheap_memory;
+    OwnPtr<Region> m_backup_memory;
+
+    KmallocGlobalHeap(u8* memory, size_t memory_size)
+        : m_heap(memory, memory_size, ExpandGlobalHeap(*this))
+    {
+    }
+    void allocate_backup_memory()
+    {
+        if (m_backup_memory)
+            return;
+        m_backup_memory = MM.allocate_kernel_region(1 * MiB, "kmalloc subheap", Region::Access::Read | Region::Access::Write, AllocationStrategy::AllocateNow);
+    }
+
+    size_t backup_memory_bytes() const
+    {
+        return m_backup_memory ? m_backup_memory->size() : 0;
+    }
 };
 
-#define BASE_PHYSICAL (0xc0000000 + (4 * MB))
-#define CHUNK_SIZE 32
-#define POOL_SIZE (3 * MB)
+READONLY_AFTER_INIT static KmallocGlobalHeap* g_kmalloc_global;
+static u8 g_kmalloc_global_heap[sizeof(KmallocGlobalHeap)];
 
-#define ETERNAL_BASE_PHYSICAL (0xc0000000 + (2 * MB))
-#define ETERNAL_RANGE_SIZE (2 * MB)
+// Treat the heap as logically separate from .bss
+__attribute__((section(".heap"))) static u8 kmalloc_eternal_heap[ETERNAL_RANGE_SIZE];
+__attribute__((section(".heap"))) static u8 kmalloc_pool_heap[POOL_SIZE];
 
-static u8 alloc_map[POOL_SIZE / CHUNK_SIZE / 8];
-
-size_t g_kmalloc_bytes_allocated = 0;
-size_t g_kmalloc_bytes_free = POOL_SIZE;
-size_t g_kmalloc_bytes_eternal = 0;
-size_t g_kmalloc_call_count;
-size_t g_kfree_call_count;
+static size_t g_kmalloc_bytes_eternal = 0;
+static size_t g_kmalloc_call_count;
+static size_t g_kfree_call_count;
+static size_t g_nested_kfree_calls;
 bool g_dump_kmalloc_stacks;
 
 static u8* s_next_eternal_ptr;
-static u8* s_end_of_eternal_range;
+READONLY_AFTER_INIT static u8* s_end_of_eternal_range;
 
-void kmalloc_init()
+static void kmalloc_allocate_backup_memory()
 {
-    memset(&alloc_map, 0, sizeof(alloc_map));
-    memset((void*)BASE_PHYSICAL, 0, POOL_SIZE);
+    g_kmalloc_global->allocate_backup_memory();
+}
 
-    g_kmalloc_bytes_eternal = 0;
-    g_kmalloc_bytes_allocated = 0;
-    g_kmalloc_bytes_free = POOL_SIZE;
+void kmalloc_enable_expand()
+{
+    g_kmalloc_global->allocate_backup_memory();
+}
 
-    s_next_eternal_ptr = (u8*)ETERNAL_BASE_PHYSICAL;
-    s_end_of_eternal_range = s_next_eternal_ptr + ETERNAL_RANGE_SIZE;
+static inline void kmalloc_verify_nospinlock_held()
+{
+    // Catch bad callers allocating under spinlock.
+    if constexpr (KMALLOC_VERIFY_NO_SPINLOCK_HELD) {
+        VERIFY(!Processor::current().in_critical());
+    }
+}
+
+UNMAP_AFTER_INIT void kmalloc_init()
+{
+    // Zero out heap since it's placed after end_of_kernel_bss.
+    memset(kmalloc_eternal_heap, 0, sizeof(kmalloc_eternal_heap));
+    memset(kmalloc_pool_heap, 0, sizeof(kmalloc_pool_heap));
+    g_kmalloc_global = new (g_kmalloc_global_heap) KmallocGlobalHeap(kmalloc_pool_heap, sizeof(kmalloc_pool_heap));
+
+    s_lock.initialize();
+
+    s_next_eternal_ptr = kmalloc_eternal_heap;
+    s_end_of_eternal_range = s_next_eternal_ptr + sizeof(kmalloc_pool_heap);
 }
 
 void* kmalloc_eternal(size_t size)
 {
+    kmalloc_verify_nospinlock_held();
+
+    size = round_up_to_power_of_two(size, sizeof(void*));
+
+    ScopedSpinLock lock(s_lock);
     void* ptr = s_next_eternal_ptr;
     s_next_eternal_ptr += size;
-    ASSERT(s_next_eternal_ptr < s_end_of_eternal_range);
+    VERIFY(s_next_eternal_ptr < s_end_of_eternal_range);
     g_kmalloc_bytes_eternal += size;
     return ptr;
 }
 
-void* kmalloc_aligned(size_t size, size_t alignment)
+void* kmalloc(size_t size)
 {
-    void* ptr = kmalloc(size + alignment + sizeof(void*));
-    size_t max_addr = (size_t)ptr + alignment;
-    void* aligned_ptr = (void*)(max_addr - (max_addr % alignment));
-    ((void**)aligned_ptr)[-1] = ptr;
-    return aligned_ptr;
-}
-
-void kfree_aligned(void* ptr)
-{
-    kfree(((void**)ptr)[-1]);
-}
-
-void* kmalloc_page_aligned(size_t size)
-{
-    void* ptr = kmalloc_aligned(size, PAGE_SIZE);
-    size_t d = (size_t)ptr;
-    ASSERT((d & PAGE_MASK) == d);
-    return ptr;
-}
-
-inline void* kmalloc_allocate(size_t first_chunk, size_t chunks_needed)
-{
-    auto* a = (AllocationHeader*)(BASE_PHYSICAL + (first_chunk * CHUNK_SIZE));
-    u8* ptr = a->data;
-    a->allocation_size_in_chunks = chunks_needed;
-
-    Bitmap bitmap_wrapper = Bitmap::wrap(alloc_map, POOL_SIZE / CHUNK_SIZE);
-    bitmap_wrapper.set_range(first_chunk, chunks_needed, true);
-
-    g_kmalloc_bytes_allocated += a->allocation_size_in_chunks * CHUNK_SIZE;
-    g_kmalloc_bytes_free -= a->allocation_size_in_chunks * CHUNK_SIZE;
-#ifdef SANITIZE_KMALLOC
-    memset(ptr, KMALLOC_SCRUB_BYTE, (a->allocation_size_in_chunks * CHUNK_SIZE) - sizeof(AllocationHeader));
-#endif
-    return ptr;
-}
-
-void* kmalloc_impl(size_t size)
-{
-    Kernel::InterruptDisabler disabler;
+    kmalloc_verify_nospinlock_held();
+    ScopedSpinLock lock(s_lock);
     ++g_kmalloc_call_count;
 
     if (g_dump_kmalloc_stacks && Kernel::g_kernel_symbols_available) {
-        dbg() << "kmalloc(" << size << ")";
+        dbgln("kmalloc({})", size);
         Kernel::dump_backtrace();
     }
 
-    // We need space for the AllocationHeader at the head of the block.
-    size_t real_size = size + sizeof(AllocationHeader);
-
-    if (g_kmalloc_bytes_free < real_size) {
-        Kernel::dump_backtrace();
-        klog() << "kmalloc(): PANIC! Out of memory (sucks, dude)\nsum_free=" << g_kmalloc_bytes_free << ", real_size=" << real_size;
-        Kernel::hang();
+    void* ptr = g_kmalloc_global->m_heap.allocate(size);
+    if (!ptr) {
+        PANIC("kmalloc: Out of memory (requested size: {})", size);
     }
 
-    size_t chunks_needed = (real_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    Thread* current_thread = Thread::current();
+    if (!current_thread)
+        current_thread = Processor::idle_thread();
+    if (current_thread)
+        PerformanceManager::add_kmalloc_perf_event(*current_thread, size, (FlatPtr)ptr);
 
-    Bitmap bitmap_wrapper = Bitmap::wrap(alloc_map, POOL_SIZE / CHUNK_SIZE);
-    Optional<size_t> first_chunk;
-
-    // Choose the right politic for allocation.
-    constexpr u32 best_fit_threshold = 128;
-    if (chunks_needed < best_fit_threshold) {
-        first_chunk = bitmap_wrapper.find_first_fit(chunks_needed);
-    } else {
-        first_chunk = bitmap_wrapper.find_best_fit(chunks_needed);
-    }
-
-    if (!first_chunk.has_value()) {
-        klog() << "kmalloc(): PANIC! Out of memory (no suitable block for size " << size << ")";
-        Kernel::dump_backtrace();
-        Kernel::hang();
-    }
-
-    return kmalloc_allocate(first_chunk.value(), chunks_needed);
+    return ptr;
 }
 
 void kfree(void* ptr)
@@ -173,48 +271,71 @@ void kfree(void* ptr)
     if (!ptr)
         return;
 
-    Kernel::InterruptDisabler disabler;
+    kmalloc_verify_nospinlock_held();
+    ScopedSpinLock lock(s_lock);
     ++g_kfree_call_count;
+    ++g_nested_kfree_calls;
 
-    auto* a = (AllocationHeader*)((((u8*)ptr) - sizeof(AllocationHeader)));
-    FlatPtr start = ((FlatPtr)a - (FlatPtr)BASE_PHYSICAL) / CHUNK_SIZE;
+    if (g_nested_kfree_calls == 1) {
+        Thread* current_thread = Thread::current();
+        if (!current_thread)
+            current_thread = Processor::idle_thread();
+        if (current_thread)
+            PerformanceManager::add_kfree_perf_event(*current_thread, 0, (FlatPtr)ptr);
+    }
 
-    Bitmap bitmap_wrapper = Bitmap::wrap(alloc_map, POOL_SIZE / CHUNK_SIZE);
-    bitmap_wrapper.set_range(start, a->allocation_size_in_chunks, false);
-
-    g_kmalloc_bytes_allocated -= a->allocation_size_in_chunks * CHUNK_SIZE;
-    g_kmalloc_bytes_free += a->allocation_size_in_chunks * CHUNK_SIZE;
-
-#ifdef SANITIZE_KMALLOC
-    memset(a, KFREE_SCRUB_BYTE, a->allocation_size_in_chunks * CHUNK_SIZE);
-#endif
+    g_kmalloc_global->m_heap.deallocate(ptr);
+    --g_nested_kfree_calls;
 }
 
 void* krealloc(void* ptr, size_t new_size)
 {
-    if (!ptr)
-        return kmalloc(new_size);
-
-    Kernel::InterruptDisabler disabler;
-
-    auto* a = (AllocationHeader*)((((u8*)ptr) - sizeof(AllocationHeader)));
-    size_t old_size = a->allocation_size_in_chunks * CHUNK_SIZE;
-
-    if (old_size == new_size)
-        return ptr;
-
-    auto* new_ptr = kmalloc(new_size);
-    memcpy(new_ptr, ptr, min(old_size, new_size));
-    kfree(ptr);
-    return new_ptr;
+    kmalloc_verify_nospinlock_held();
+    ScopedSpinLock lock(s_lock);
+    return g_kmalloc_global->m_heap.reallocate(ptr, new_size);
 }
 
-void* operator new(size_t size)
+size_t kmalloc_good_size(size_t size)
+{
+    return size;
+}
+
+void* operator new(size_t size) noexcept
 {
     return kmalloc(size);
 }
 
-void* operator new[](size_t size)
+void* operator new[](size_t size) noexcept
 {
     return kmalloc(size);
+}
+
+void operator delete(void* ptr) noexcept
+{
+    return kfree(ptr);
+}
+
+void operator delete(void* ptr, size_t) noexcept
+{
+    return kfree(ptr);
+}
+
+void operator delete[](void* ptr) noexcept
+{
+    return kfree(ptr);
+}
+
+void operator delete[](void* ptr, size_t) noexcept
+{
+    return kfree(ptr);
+}
+
+void get_kmalloc_stats(kmalloc_stats& stats)
+{
+    ScopedSpinLock lock(s_lock);
+    stats.bytes_allocated = g_kmalloc_global->m_heap.allocated_bytes();
+    stats.bytes_free = g_kmalloc_global->m_heap.free_bytes() + g_kmalloc_global->backup_memory_bytes();
+    stats.bytes_eternal = g_kmalloc_bytes_eternal;
+    stats.kmalloc_call_count = g_kmalloc_call_count;
+    stats.kfree_call_count = g_kfree_call_count;
 }

@@ -1,36 +1,16 @@
 /*
  * Copyright (c) 2020, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Assertions.h>
-#include <AK/String.h>
-#include <Kernel/Arch/i386/CPU.h>
+#include <AK/OwnPtr.h>
+#include <AK/Singleton.h>
+#include <Kernel/API/MousePacket.h>
+#include <Kernel/Arch/x86/CPU.h>
 #include <Kernel/CommandLine.h>
+#include <Kernel/Debug.h>
 #include <Kernel/Devices/VMWareBackdoor.h>
-#include <Kernel/MousePacket.h>
-#include <Kernel/IO.h>
 
 namespace Kernel {
 
@@ -50,8 +30,6 @@ namespace Kernel {
 #define VMWARE_PORT 0x5658
 #define VMWARE_PORT_HIGHBANDWIDTH 0x5659
 
-//#define VMWAREBACKDOOR_DEBUG
-
 inline void vmware_out(VMWareCommand& command)
 {
     command.magic = VMWARE_MAGIC;
@@ -64,7 +42,6 @@ inline void vmware_out(VMWareCommand& command)
 
 inline void vmware_high_bandwidth_send(VMWareCommand& command)
 {
-
     command.magic = VMWARE_MAGIC;
     command.port = VMWARE_PORT_HIGHBANDWIDTH;
 
@@ -80,38 +57,44 @@ inline void vmware_high_bandwidth_get(VMWareCommand& command)
                  : "+a"(command.ax), "+b"(command.bx), "+c"(command.cx), "+d"(command.dx), "+S"(command.si), "+D"(command.di));
 }
 
-static VMWareBackdoor* s_vmware_backdoor;
+class VMWareBackdoorDetector {
+public:
+    VMWareBackdoorDetector()
+    {
+        if (detect_presence())
+            m_backdoor = make<VMWareBackdoor>();
+    }
 
-static bool detect_presence()
-{
-    VMWareCommand command;
-    command.bx = ~VMWARE_MAGIC;
-    command.command = VMWARE_CMD_GETVERSION;
-    vmware_out(command);
-    if (command.bx != VMWARE_MAGIC || command.ax == 0xFFFFFFFF)
-        return false;
-    return true;
-}
+    VMWareBackdoor* get_instance()
+    {
+        return m_backdoor.ptr();
+    }
 
-VMWareBackdoor* VMWareBackdoor::initialize()
-{
-    ASSERT(s_vmware_backdoor == nullptr);
-    if (!detect_presence())
-        return nullptr;
+private:
+    static bool detect_presence()
+    {
+        VMWareCommand command;
+        command.bx = ~VMWARE_MAGIC;
+        command.command = VMWARE_CMD_GETVERSION;
+        vmware_out(command);
+        if (command.bx != VMWARE_MAGIC || command.ax == 0xFFFFFFFF)
+            return false;
+        return true;
+    }
 
-    s_vmware_backdoor = new VMWareBackdoor;
-    klog() << "VMWare backdoor opened.";
-    return s_vmware_backdoor;
-}
+    OwnPtr<VMWareBackdoor> m_backdoor;
+};
+
+static AK::Singleton<VMWareBackdoorDetector> s_vmware_backdoor;
 
 VMWareBackdoor* VMWareBackdoor::the()
 {
-    return s_vmware_backdoor;
+    return s_vmware_backdoor->get_instance();
 }
 
-VMWareBackdoor::VMWareBackdoor()
+UNMAP_AFTER_INIT VMWareBackdoor::VMWareBackdoor()
 {
-    if (kernel_command_line().lookup("vmmouse").value_or("on") == "on")
+    if (kernel_command_line().is_vmmouse_enabled())
         enable_absolute_vmmouse();
 }
 
@@ -138,7 +121,7 @@ void VMWareBackdoor::enable_absolute_vmmouse()
     InterruptDisabler disabler;
     if (!detect_vmmouse())
         return;
-    klog() << "VMWareBackdoor: Enabling absolute mouse mode";
+    dmesgln("VMWareBackdoor: Enabling absolute mouse mode");
 
     VMWareCommand command;
 
@@ -146,7 +129,7 @@ void VMWareBackdoor::enable_absolute_vmmouse()
     command.command = VMMOUSE_STATUS;
     send(command);
     if (command.ax == 0xFFFF0000) {
-        klog() << "VMWareBackdoor: VMMOUSE_STATUS got bad status";
+        dmesgln("VMWareBackdoor: VMMOUSE_STATUS got bad status");
         return;
     }
 
@@ -169,25 +152,34 @@ void VMWareBackdoor::disable_absolute_vmmouse()
 void VMWareBackdoor::send_high_bandwidth(VMWareCommand& command)
 {
     vmware_high_bandwidth_send(command);
-#ifdef VMWAREBACKDOOR_DEBUG
-    dbg() << "VMWareBackdoor Command High bandwidth Send Results: EAX " << String::format("%x", command.ax) << " EBX " << String::format("%x", command.bx) << " ECX " << String::format("%x", command.cx) << " EDX " << String::format("%x", command.dx);
-#endif
+
+    dbgln_if(VMWARE_BACKDOOR_DEBUG, "VMWareBackdoor Command High bandwidth Send Results: EAX {:#x} EBX {:#x} ECX {:#x} EDX {:#x}",
+        command.ax,
+        command.bx,
+        command.cx,
+        command.dx);
 }
 
 void VMWareBackdoor::get_high_bandwidth(VMWareCommand& command)
 {
     vmware_high_bandwidth_get(command);
-#ifdef VMWAREBACKDOOR_DEBUG
-    dbg() << "VMWareBackdoor Command High bandwidth Get Results: EAX " << String::format("%x", command.ax) << " EBX " << String::format("%x", command.bx) << " ECX " << String::format("%x", command.cx) << " EDX " << String::format("%x", command.dx);
-#endif
+
+    dbgln_if(VMWARE_BACKDOOR_DEBUG, "VMWareBackdoor Command High bandwidth Get Results: EAX {:#x} EBX {:#x} ECX {:#x} EDX {:#x}",
+        command.ax,
+        command.bx,
+        command.cx,
+        command.dx);
 }
 
 void VMWareBackdoor::send(VMWareCommand& command)
 {
     vmware_out(command);
-#ifdef VMWAREBACKDOOR_DEBUG
-    dbg() << "VMWareBackdoor Command Send Results: EAX " << String::format("%x", command.ax) << " EBX " << String::format("%x", command.bx) << " ECX " << String::format("%x", command.cx) << " EDX " << String::format("%x", command.dx);
-#endif
+
+    dbgln_if(VMWARE_BACKDOOR_DEBUG, "VMWareBackdoor Command Send Results: EAX {:#x} EBX {:#x} ECX {:#x} EDX {:#x}",
+        command.ax,
+        command.bx,
+        command.cx,
+        command.dx);
 }
 
 Optional<MousePacket> VMWareBackdoor::receive_mouse_packet()
@@ -197,9 +189,7 @@ Optional<MousePacket> VMWareBackdoor::receive_mouse_packet()
     command.command = VMMOUSE_STATUS;
     send(command);
     if (command.ax == 0xFFFF0000) {
-#ifdef PS2MOUSE_DEBUG
-        klog() << "PS2MouseDevice: Resetting VMWare mouse";
-#endif
+        dbgln_if(PS2MOUSE_DEBUG, "PS2MouseDevice: Resetting VMWare mouse");
         disable_absolute_vmmouse();
         enable_absolute_vmmouse();
         return {};
@@ -215,12 +205,13 @@ Optional<MousePacket> VMWareBackdoor::receive_mouse_packet()
     int buttons = (command.ax & 0xFFFF);
     int x = (command.bx);
     int y = (command.cx);
-    int z = (command.dx);
+    int z = (i8)(command.dx); // signed 8 bit value only!
 
-#ifdef PS2MOUSE_DEBUG
-    dbg() << "Absolute Mouse: Buttons " << String::format("%x", buttons);
-    dbg() << "Mouse: X " << x << ", Y " << y << ", Z " << z;
-#endif
+    if constexpr (PS2MOUSE_DEBUG) {
+        dbgln("Absolute Mouse: Buttons {:x}", buttons);
+        dbgln("Mouse: x={}, y={}, z={}", x, y, z);
+    }
+
     MousePacket packet;
     packet.x = x;
     packet.y = y;

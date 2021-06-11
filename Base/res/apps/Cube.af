@@ -2,6 +2,3 @@
 Name=Cube
 Executable=/bin/Cube
 Category=Demos
-
-[Icons]
-16x16=/res/icons/16x16/app-cube.png

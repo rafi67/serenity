@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/LexicalPath.h>
@@ -31,8 +11,8 @@
 
 namespace AK {
 
-LexicalPath::LexicalPath(const StringView& s)
-    : m_string(s)
+LexicalPath::LexicalPath(String s)
+    : m_string(move(s))
 {
     canonicalize();
     m_is_valid = true;
@@ -75,7 +55,7 @@ void LexicalPath::canonicalize()
         }
     }
     if (canonical_parts.is_empty()) {
-        m_string = m_basename = m_dirname = "/";
+        m_string = m_basename = m_dirname = m_is_absolute ? "/" : ".";
         return;
     }
 
@@ -88,11 +68,19 @@ void LexicalPath::canonicalize()
     }
     m_dirname = dirname_builder.to_string();
 
+    if (m_dirname.is_empty()) {
+        m_dirname = m_is_absolute ? "/" : ".";
+    }
+
     m_basename = canonical_parts.last();
-    auto name_parts = m_basename.split('.');
-    m_title = name_parts.is_empty() ? String() : name_parts[0];
-    if (name_parts.size() > 1)
-        m_extension = name_parts.last();
+
+    Optional<size_t> last_dot = StringView(m_basename).find_last_of('.');
+    if (last_dot.has_value()) {
+        m_title = m_basename.substring(0, last_dot.value());
+        m_extension = m_basename.substring(last_dot.value() + 1, m_basename.length() - last_dot.value() - 1);
+    } else {
+        m_title = m_basename;
+    }
 
     StringBuilder builder(approximate_canonical_length);
     for (size_t i = 0; i < canonical_parts.size(); ++i) {
@@ -110,9 +98,37 @@ bool LexicalPath::has_extension(const StringView& extension) const
     return m_string.ends_with(extension, CaseSensitivity::CaseInsensitive);
 }
 
-String LexicalPath::canonicalized_path(const StringView& path)
+String LexicalPath::canonicalized_path(String path)
 {
-    return LexicalPath(path).string();
+    return LexicalPath(move(path)).string();
+}
+
+String LexicalPath::relative_path(String absolute_path, const String& prefix)
+{
+    if (!LexicalPath { absolute_path }.is_absolute() || !LexicalPath { prefix }.is_absolute())
+        return {};
+
+    if (!absolute_path.starts_with(prefix))
+        return absolute_path;
+
+    size_t prefix_length = LexicalPath { prefix }.string().length();
+    if (prefix != "/")
+        prefix_length++;
+    if (prefix_length >= absolute_path.length())
+        return {};
+
+    return absolute_path.substring(prefix_length);
+}
+
+void LexicalPath::append(String const& component)
+{
+    StringBuilder builder;
+    builder.append(m_string);
+    builder.append('/');
+    builder.append(component);
+
+    m_string = builder.to_string();
+    canonicalize();
 }
 
 }

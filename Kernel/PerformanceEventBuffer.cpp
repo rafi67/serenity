@@ -1,111 +1,175 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/JsonArraySerializer.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonObjectSerializer.h>
+#include <AK/ScopeGuard.h>
+#include <Kernel/Arch/x86/SmapDisabler.h>
+#include <Kernel/FileSystem/Custody.h>
 #include <Kernel/KBufferBuilder.h>
 #include <Kernel/PerformanceEventBuffer.h>
+#include <Kernel/Process.h>
 
 namespace Kernel {
 
-PerformanceEventBuffer::PerformanceEventBuffer()
-    : m_buffer(KBuffer::create_with_size(4 * MB))
+PerformanceEventBuffer::PerformanceEventBuffer(NonnullOwnPtr<KBuffer> buffer)
+    : m_buffer(move(buffer))
 {
 }
 
-KResult PerformanceEventBuffer::append(int type, FlatPtr arg1, FlatPtr arg2)
+NEVER_INLINE KResult PerformanceEventBuffer::append(int type, FlatPtr arg1, FlatPtr arg2, const StringView& arg3, Thread* current_thread)
 {
-    if (count() >= capacity())
-        return KResult(-ENOBUFS);
-
-    PerformanceEvent event;
-    event.type = type;
-
-    switch (type) {
-    case PERF_EVENT_MALLOC:
-        event.data.malloc.size = arg1;
-        event.data.malloc.ptr = arg2;
-#ifdef VERY_DEBUG
-        dbg() << "PERF_EVENT_MALLOC: " << (void*)event.data.malloc.ptr << " (" << event.data.malloc.size << ")";
-#endif
-        break;
-    case PERF_EVENT_FREE:
-        event.data.free.ptr = arg1;
-#ifdef VERY_DEBUG
-        dbg() << "PERF_EVENT_FREE: " << (void*)event.data.free.ptr;
-#endif
-        break;
-    default:
-        return KResult(-EINVAL);
-    }
-
     FlatPtr ebp;
     asm volatile("movl %%ebp, %%eax"
                  : "=a"(ebp));
-    FlatPtr eip;
-    copy_from_user(&eip, (FlatPtr*)&Thread::current->get_register_dump_from_stack().eip);
-    Vector<FlatPtr> backtrace;
-    {
-        SmapDisabler disabler;
-        backtrace = Thread::current->raw_backtrace(ebp, eip);
+    return append_with_eip_and_ebp(current_thread->pid(), current_thread->tid(), 0, ebp, type, 0, arg1, arg2, arg3);
+}
+
+static Vector<FlatPtr, PerformanceEvent::max_stack_frame_count> raw_backtrace(FlatPtr ebp, FlatPtr eip)
+{
+    Vector<FlatPtr, PerformanceEvent::max_stack_frame_count> backtrace;
+    if (eip != 0)
+        backtrace.append(eip);
+    FlatPtr stack_ptr_copy;
+    FlatPtr stack_ptr = (FlatPtr)ebp;
+    // FIXME: Figure out how to remove this SmapDisabler without breaking profile stacks.
+    SmapDisabler disabler;
+    while (stack_ptr) {
+        void* fault_at;
+        if (!safe_memcpy(&stack_ptr_copy, (void*)stack_ptr, sizeof(FlatPtr), fault_at))
+            break;
+        FlatPtr retaddr;
+        if (!safe_memcpy(&retaddr, (void*)(stack_ptr + sizeof(FlatPtr)), sizeof(FlatPtr), fault_at))
+            break;
+        if (retaddr == 0)
+            break;
+        backtrace.append(retaddr);
+        if (backtrace.size() == PerformanceEvent::max_stack_frame_count)
+            break;
+        stack_ptr = stack_ptr_copy;
     }
+    return backtrace;
+}
+
+KResult PerformanceEventBuffer::append_with_eip_and_ebp(ProcessID pid, ThreadID tid,
+    u32 eip, u32 ebp, int type, u32 lost_samples, FlatPtr arg1, FlatPtr arg2, const StringView& arg3)
+{
+    if (count() >= capacity())
+        return ENOBUFS;
+
+    if ((g_profiling_event_mask & type) == 0)
+        return EINVAL;
+
+    auto current_thread = Thread::current();
+    u32 enter_count = 0;
+    if (current_thread)
+        enter_count = current_thread->enter_profiler();
+    ScopeGuard leave_profiler([&] {
+        if (current_thread)
+            current_thread->leave_profiler();
+    });
+    if (enter_count > 0)
+        return EINVAL;
+
+    PerformanceEvent event;
+    event.type = type;
+    event.lost_samples = lost_samples;
+
+    switch (type) {
+    case PERF_EVENT_SAMPLE:
+        break;
+    case PERF_EVENT_MALLOC:
+        event.data.malloc.size = arg1;
+        event.data.malloc.ptr = arg2;
+        break;
+    case PERF_EVENT_FREE:
+        event.data.free.ptr = arg1;
+        break;
+    case PERF_EVENT_MMAP:
+        event.data.mmap.ptr = arg1;
+        event.data.mmap.size = arg2;
+        memset(event.data.mmap.name, 0, sizeof(event.data.mmap.name));
+        if (!arg3.is_empty())
+            memcpy(event.data.mmap.name, arg3.characters_without_null_termination(), min(arg3.length(), sizeof(event.data.mmap.name) - 1));
+        break;
+    case PERF_EVENT_MUNMAP:
+        event.data.munmap.ptr = arg1;
+        event.data.munmap.size = arg2;
+        break;
+    case PERF_EVENT_PROCESS_CREATE:
+        event.data.process_create.parent_pid = arg1;
+        memset(event.data.process_create.executable, 0, sizeof(event.data.process_create.executable));
+        if (!arg3.is_empty()) {
+            memcpy(event.data.process_create.executable, arg3.characters_without_null_termination(),
+                min(arg3.length(), sizeof(event.data.process_create.executable) - 1));
+        }
+        break;
+    case PERF_EVENT_PROCESS_EXEC:
+        memset(event.data.process_exec.executable, 0, sizeof(event.data.process_exec.executable));
+        if (!arg3.is_empty()) {
+            memcpy(event.data.process_exec.executable, arg3.characters_without_null_termination(),
+                min(arg3.length(), sizeof(event.data.process_exec.executable) - 1));
+        }
+        break;
+    case PERF_EVENT_PROCESS_EXIT:
+        break;
+    case PERF_EVENT_THREAD_CREATE:
+        event.data.thread_create.parent_tid = arg1;
+        break;
+    case PERF_EVENT_THREAD_EXIT:
+        break;
+    case PERF_EVENT_CONTEXT_SWITCH:
+        event.data.context_switch.next_pid = arg1;
+        event.data.context_switch.next_tid = arg2;
+        break;
+    case PERF_EVENT_KMALLOC:
+        event.data.kmalloc.size = arg1;
+        event.data.kmalloc.ptr = arg2;
+        break;
+    case PERF_EVENT_KFREE:
+        event.data.kfree.size = arg1;
+        event.data.kfree.ptr = arg2;
+        break;
+    case PERF_EVENT_PAGE_FAULT:
+        break;
+    default:
+        return EINVAL;
+    }
+
+    auto backtrace = raw_backtrace(ebp, eip);
     event.stack_size = min(sizeof(event.stack) / sizeof(FlatPtr), static_cast<size_t>(backtrace.size()));
     memcpy(event.stack, backtrace.data(), event.stack_size * sizeof(FlatPtr));
 
-#ifdef VERY_DEBUG
-    for (size_t i = 0; i < event.stack_size; ++i)
-        dbg() << "    " << (void*)event.stack[i];
-#endif
-
-    event.timestamp = g_uptime;
+    event.pid = pid.value();
+    event.tid = tid.value();
+    event.timestamp = TimeManagement::the().uptime_ms();
     at(m_count++) = event;
     return KSuccess;
 }
 
 PerformanceEvent& PerformanceEventBuffer::at(size_t index)
 {
-    ASSERT(index < capacity());
-    auto* events = reinterpret_cast<PerformanceEvent*>(m_buffer.data());
+    VERIFY(index < capacity());
+    auto* events = reinterpret_cast<PerformanceEvent*>(m_buffer->data());
     return events[index];
 }
 
-KBuffer PerformanceEventBuffer::to_json(pid_t pid, const String& executable_path) const
+template<typename Serializer>
+bool PerformanceEventBuffer::to_json_impl(Serializer& object) const
 {
-    KBufferBuilder builder;
-
-    JsonObjectSerializer object(builder);
-    object.add("pid", pid);
-    object.add("executable", executable_path);
-
     auto array = object.add_array("events");
+    bool seen_first_sample = false;
     for (size_t i = 0; i < m_count; ++i) {
         auto& event = at(i);
         auto event_object = array.add_object();
         switch (event.type) {
+        case PERF_EVENT_SAMPLE:
+            event_object.add("type", "sample");
+            break;
         case PERF_EVENT_MALLOC:
             event_object.add("type", "malloc");
             event_object.add("ptr", static_cast<u64>(event.data.malloc.ptr));
@@ -115,8 +179,61 @@ KBuffer PerformanceEventBuffer::to_json(pid_t pid, const String& executable_path
             event_object.add("type", "free");
             event_object.add("ptr", static_cast<u64>(event.data.free.ptr));
             break;
+        case PERF_EVENT_MMAP:
+            event_object.add("type", "mmap");
+            event_object.add("ptr", static_cast<u64>(event.data.mmap.ptr));
+            event_object.add("size", static_cast<u64>(event.data.mmap.size));
+            event_object.add("name", event.data.mmap.name);
+            break;
+        case PERF_EVENT_MUNMAP:
+            event_object.add("type", "munmap");
+            event_object.add("ptr", static_cast<u64>(event.data.munmap.ptr));
+            event_object.add("size", static_cast<u64>(event.data.munmap.size));
+            break;
+        case PERF_EVENT_PROCESS_CREATE:
+            event_object.add("type", "process_create");
+            event_object.add("parent_pid", static_cast<u64>(event.data.process_create.parent_pid));
+            event_object.add("executable", event.data.process_create.executable);
+            break;
+        case PERF_EVENT_PROCESS_EXEC:
+            event_object.add("type", "process_exec");
+            event_object.add("executable", event.data.process_exec.executable);
+            break;
+        case PERF_EVENT_PROCESS_EXIT:
+            event_object.add("type", "process_exit");
+            break;
+        case PERF_EVENT_THREAD_CREATE:
+            event_object.add("type", "thread_create");
+            event_object.add("parent_tid", static_cast<u64>(event.data.thread_create.parent_tid));
+            break;
+        case PERF_EVENT_THREAD_EXIT:
+            event_object.add("type", "thread_exit");
+            break;
+        case PERF_EVENT_CONTEXT_SWITCH:
+            event_object.add("type", "context_switch");
+            event_object.add("next_pid", static_cast<u64>(event.data.context_switch.next_pid));
+            event_object.add("next_tid", static_cast<u64>(event.data.context_switch.next_tid));
+            break;
+        case PERF_EVENT_KMALLOC:
+            event_object.add("type", "kmalloc");
+            event_object.add("ptr", static_cast<u64>(event.data.kmalloc.ptr));
+            event_object.add("size", static_cast<u64>(event.data.kmalloc.size));
+            break;
+        case PERF_EVENT_KFREE:
+            event_object.add("type", "kfree");
+            event_object.add("ptr", static_cast<u64>(event.data.kfree.ptr));
+            event_object.add("size", static_cast<u64>(event.data.kfree.size));
+            break;
+        case PERF_EVENT_PAGE_FAULT:
+            event_object.add("type", "page_fault");
+            break;
         }
+        event_object.add("pid", event.pid);
+        event_object.add("tid", event.tid);
         event_object.add("timestamp", event.timestamp);
+        event_object.add("lost_samples", seen_first_sample ? event.lost_samples : 0);
+        if (event.type == PERF_EVENT_SAMPLE)
+            seen_first_sample = true;
         auto stack_array = event_object.add_array("stack");
         for (size_t j = 0; j < event.stack_size; ++j) {
             stack_array.add(event.stack[j]);
@@ -126,7 +243,46 @@ KBuffer PerformanceEventBuffer::to_json(pid_t pid, const String& executable_path
     }
     array.finish();
     object.finish();
-    return builder.build();
+    return true;
+}
+
+bool PerformanceEventBuffer::to_json(KBufferBuilder& builder) const
+{
+    JsonObjectSerializer object(builder);
+    return to_json_impl(object);
+}
+
+OwnPtr<PerformanceEventBuffer> PerformanceEventBuffer::try_create_with_size(size_t buffer_size)
+{
+    auto buffer = KBuffer::try_create_with_size(buffer_size, Region::Access::Read | Region::Access::Write, "Performance events", AllocationStrategy::AllocateNow);
+    if (!buffer)
+        return {};
+    return adopt_own_if_nonnull(new PerformanceEventBuffer(buffer.release_nonnull()));
+}
+
+void PerformanceEventBuffer::add_process(const Process& process, ProcessEventType event_type)
+{
+    ScopedSpinLock locker(process.space().get_lock());
+
+    String executable;
+    if (process.executable())
+        executable = process.executable()->absolute_path();
+    else
+        executable = String::formatted("<{}>", process.name());
+
+    [[maybe_unused]] auto rc = append_with_eip_and_ebp(process.pid(), 0, 0, 0,
+        event_type == ProcessEventType::Create ? PERF_EVENT_PROCESS_CREATE : PERF_EVENT_PROCESS_EXEC,
+        0, process.pid().value(), 0, executable);
+
+    process.for_each_thread([&](auto& thread) {
+        [[maybe_unused]] auto rc = append_with_eip_and_ebp(process.pid(), thread.tid().value(),
+            0, 0, PERF_EVENT_THREAD_CREATE, 0, 0, 0, nullptr);
+    });
+
+    for (auto& region : process.space().regions()) {
+        [[maybe_unused]] auto rc = append_with_eip_and_ebp(process.pid(), 0,
+            0, 0, PERF_EVENT_MMAP, 0, region->range().base().get(), region->range().size(), region->name());
+    }
 }
 
 }

@@ -1,41 +1,21 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/BinarySearch.h>
-#include <AK/QuickSort.h>
+#include <AK/Checked.h>
 #include <Kernel/Random.h>
 #include <Kernel/Thread.h>
 #include <Kernel/VM/RangeAllocator.h>
 
-//#define VRA_DEBUG
 #define VM_GUARD_PAGES
 
 namespace Kernel {
 
 RangeAllocator::RangeAllocator()
+    : m_total_range({}, 0)
 {
 }
 
@@ -43,13 +23,11 @@ void RangeAllocator::initialize_with_range(VirtualAddress base, size_t size)
 {
     m_total_range = { base, size };
     m_available_ranges.append({ base, size });
-#ifdef VRA_DEBUG
-    dump();
-#endif
 }
 
 void RangeAllocator::initialize_from_parent(const RangeAllocator& parent_allocator)
 {
+    ScopedSpinLock lock(parent_allocator.m_lock);
     m_total_range = parent_allocator.m_total_range;
     m_available_ranges = parent_allocator.m_available_ranges;
 }
@@ -60,45 +38,63 @@ RangeAllocator::~RangeAllocator()
 
 void RangeAllocator::dump() const
 {
-    dbg() << "RangeAllocator{" << this << "}";
+    VERIFY(m_lock.is_locked());
+    dbgln("RangeAllocator({})", this);
     for (auto& range : m_available_ranges) {
-        dbg() << "    " << String::format("%x", range.base().get()) << " -> " << String::format("%x", range.end().get() - 1);
+        dbgln("    {:x} -> {:x}", range.base().get(), range.end().get() - 1);
     }
-}
-
-Vector<Range, 2> Range::carve(const Range& taken)
-{
-    Vector<Range, 2> parts;
-    if (taken == *this)
-        return {};
-    if (taken.base() > base())
-        parts.append({ base(), taken.base().get() - base().get() });
-    if (taken.end() < end())
-        parts.append({ taken.end(), end().get() - taken.end().get() });
-#ifdef VRA_DEBUG
-    dbg() << "VRA: carve: take " << String::format("%x", taken.base().get()) << "-" << String::format("%x", taken.end().get() - 1) << " from " << String::format("%x", base().get()) << "-" << String::format("%x", end().get() - 1);
-    for (int i = 0; i < parts.size(); ++i)
-        dbg() << "        " << String::format("%x", parts[i].base().get()) << "-" << String::format("%x", parts[i].end().get() - 1);
-#endif
-    return parts;
 }
 
 void RangeAllocator::carve_at_index(int index, const Range& range)
 {
+    VERIFY(m_lock.is_locked());
     auto remaining_parts = m_available_ranges[index].carve(range);
-    ASSERT(remaining_parts.size() >= 1);
+    VERIFY(remaining_parts.size() >= 1);
+    VERIFY(m_total_range.contains(remaining_parts[0]));
     m_available_ranges[index] = remaining_parts[0];
-    if (remaining_parts.size() == 2)
+    if (remaining_parts.size() == 2) {
+        VERIFY(m_total_range.contains(remaining_parts[1]));
         m_available_ranges.insert(index + 1, move(remaining_parts[1]));
+    }
 }
 
-Range RangeAllocator::allocate_anywhere(size_t size, size_t alignment)
+Optional<Range> RangeAllocator::allocate_randomized(size_t size, size_t alignment)
 {
     if (!size)
         return {};
 
+    VERIFY((size % PAGE_SIZE) == 0);
+    VERIFY((alignment % PAGE_SIZE) == 0);
+
+    // FIXME: I'm sure there's a smarter way to do this.
+    static constexpr size_t maximum_randomization_attempts = 1000;
+    for (size_t i = 0; i < maximum_randomization_attempts; ++i) {
+        VirtualAddress random_address { round_up_to_power_of_two(get_fast_random<FlatPtr>(), alignment) };
+
+        if (!m_total_range.contains(random_address, size))
+            continue;
+
+        auto range = allocate_specific(random_address, size);
+        if (range.has_value())
+            return range;
+    }
+
+    return allocate_anywhere(size, alignment);
+}
+
+Optional<Range> RangeAllocator::allocate_anywhere(size_t size, size_t alignment)
+{
+    if (!size)
+        return {};
+
+    VERIFY((size % PAGE_SIZE) == 0);
+    VERIFY((alignment % PAGE_SIZE) == 0);
+
 #ifdef VM_GUARD_PAGES
     // NOTE: We pad VM allocations with a guard page on each side.
+    if (Checked<size_t>::addition_would_overflow(size, PAGE_SIZE * 2))
+        return {};
+
     size_t effective_size = size + PAGE_SIZE * 2;
     size_t offset_from_effective_base = PAGE_SIZE;
 #else
@@ -106,6 +102,10 @@ Range RangeAllocator::allocate_anywhere(size_t size, size_t alignment)
     size_t offset_from_effective_base = 0;
 #endif
 
+    if (Checked<size_t>::addition_would_overflow(effective_size, alignment))
+        return {};
+
+    ScopedSpinLock lock(m_lock);
     for (size_t i = 0; i < m_available_ranges.size(); ++i) {
         auto& available_range = m_available_ranges[i];
         // FIXME: This check is probably excluding some valid candidates when using a large alignment.
@@ -116,32 +116,32 @@ Range RangeAllocator::allocate_anywhere(size_t size, size_t alignment)
         FlatPtr aligned_base = round_up_to_power_of_two(initial_base, alignment);
 
         Range allocated_range(VirtualAddress(aligned_base), size);
+        VERIFY(m_total_range.contains(allocated_range));
+
         if (available_range == allocated_range) {
-#ifdef VRA_DEBUG
-            dbg() << "VRA: Allocated perfect-fit anywhere(" << String::format("%zu", size) << ", " << String::format("%zu", alignment) << "): " << String::format("%x", allocated_range.base().get());
-#endif
             m_available_ranges.remove(i);
             return allocated_range;
         }
         carve_at_index(i, allocated_range);
-#ifdef VRA_DEBUG
-        dbg() << "VRA: Allocated anywhere(" << String::format("%zu", size) << ", " << String::format("%zu", alignment) << "): " << String::format("%x", allocated_range.base().get());
-        dump();
-#endif
         return allocated_range;
     }
-    klog() << "VRA: Failed to allocate anywhere: " << size << ", " << alignment;
+    dmesgln("RangeAllocator: Failed to allocate anywhere: size={}, alignment={}", size, alignment);
     return {};
 }
 
-Range RangeAllocator::allocate_specific(VirtualAddress base, size_t size)
+Optional<Range> RangeAllocator::allocate_specific(VirtualAddress base, size_t size)
 {
     if (!size)
         return {};
 
+    VERIFY(base.is_page_aligned());
+    VERIFY((size % PAGE_SIZE) == 0);
+
     Range allocated_range(base, size);
+    ScopedSpinLock lock(m_lock);
     for (size_t i = 0; i < m_available_ranges.size(); ++i) {
         auto& available_range = m_available_ranges[i];
+        VERIFY(m_total_range.contains(allocated_range));
         if (!available_range.contains(base, size))
             continue;
         if (available_range == allocated_range) {
@@ -149,35 +149,26 @@ Range RangeAllocator::allocate_specific(VirtualAddress base, size_t size)
             return allocated_range;
         }
         carve_at_index(i, allocated_range);
-#ifdef VRA_DEBUG
-        dbg() << "VRA: Allocated specific(" << size << "): " << String::format("%x", available_range.base().get());
-        dump();
-#endif
         return allocated_range;
     }
-    dbg() << "VRA: Failed to allocate specific range: " << base << "(" << size << ")";
     return {};
 }
 
-void RangeAllocator::deallocate(Range range)
+void RangeAllocator::deallocate(const Range& range)
 {
-    ASSERT(m_total_range.contains(range));
-    ASSERT(range.size());
-    ASSERT(range.base() < range.end());
+    ScopedSpinLock lock(m_lock);
+    VERIFY(m_total_range.contains(range));
+    VERIFY(range.size());
+    VERIFY((range.size() % PAGE_SIZE) == 0);
+    VERIFY(range.base() < range.end());
+    VERIFY(!m_available_ranges.is_empty());
 
-#ifdef VRA_DEBUG
-    dbg() << "VRA: Deallocate: " << String::format("%x", range.base().get()) << "(" << range.size() << ")";
-    dump();
-#endif
-
-    ASSERT(!m_available_ranges.is_empty());
-
-    int nearby_index = 0;
+    size_t nearby_index = 0;
     auto* existing_range = binary_search(
-        m_available_ranges.data(), m_available_ranges.size(), range, [](auto& a, auto& b) {
-            return a.base().get() - b.end().get();
-        },
-        &nearby_index);
+        m_available_ranges.span(),
+        range,
+        &nearby_index,
+        [](auto& a, auto& b) { return a.base().get() - b.end().get(); });
 
     size_t inserted_index = 0;
     if (existing_range) {
@@ -201,10 +192,6 @@ void RangeAllocator::deallocate(Range range)
             return;
         }
     }
-#ifdef VRA_DEBUG
-    dbg() << "VRA: After deallocate";
-    dump();
-#endif
 }
 
 }

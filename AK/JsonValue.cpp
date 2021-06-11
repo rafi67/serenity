@@ -1,35 +1,13 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Function.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonParser.h>
 #include <AK/JsonValue.h>
-#include <AK/StringBuilder.h>
 
 namespace AK {
 
@@ -57,7 +35,7 @@ void JsonValue::copy_from(const JsonValue& other)
     m_type = other.m_type;
     switch (m_type) {
     case Type::String:
-        ASSERT(!m_value.as_string);
+        VERIFY(!m_value.as_string);
         m_value.as_string = other.m_value.as_string;
         m_value.as_string->ref();
         break;
@@ -68,23 +46,23 @@ void JsonValue::copy_from(const JsonValue& other)
         m_value.as_array = new JsonArray(*other.m_value.as_array);
         break;
     default:
-        m_value.as_string = other.m_value.as_string;
+        m_value.as_u64 = other.m_value.as_u64;
         break;
     }
 }
 
 JsonValue::JsonValue(JsonValue&& other)
 {
-    m_type = exchange(other.m_type, Type::Undefined);
-    m_value.as_string = exchange(other.m_value.as_string, nullptr);
+    m_type = exchange(other.m_type, Type::Null);
+    m_value.as_u64 = exchange(other.m_value.as_u64, 0);
 }
 
 JsonValue& JsonValue::operator=(JsonValue&& other)
 {
     if (this != &other) {
         clear();
-        m_type = exchange(other.m_type, Type::Undefined);
-        m_value.as_string = exchange(other.m_value.as_string, nullptr);
+        m_type = exchange(other.m_type, Type::Null);
+        m_value.as_u64 = exchange(other.m_value.as_u64, 0);
     }
     return *this;
 }
@@ -203,11 +181,6 @@ JsonValue::JsonValue(const String& value)
     }
 }
 
-JsonValue::JsonValue(const IPv4Address& value)
-    : JsonValue(value.to_string())
-{
-}
-
 JsonValue::JsonValue(const JsonObject& value)
     : m_type(Type::Object)
 {
@@ -247,11 +220,11 @@ void JsonValue::clear()
     default:
         break;
     }
-    m_type = Type::Undefined;
+    m_type = Type::Null;
     m_value.as_string = nullptr;
 }
 
-JsonValue JsonValue::from_string(const StringView& input)
+Optional<JsonValue> JsonValue::from_string(const StringView& input)
 {
     return JsonParser(input).parse();
 }

@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -30,55 +10,59 @@
 #include <AK/Platform.h>
 #include <AK/StdLibExtras.h>
 
-typedef __UINT64_TYPE__ u64;
-typedef __UINT32_TYPE__ u32;
-typedef __UINT16_TYPE__ u16;
-typedef __UINT8_TYPE__ u8;
-typedef __INT64_TYPE__ i64;
-typedef __INT32_TYPE__ i32;
-typedef __INT16_TYPE__ i16;
-typedef __INT8_TYPE__ i8;
+using u64 = __UINT64_TYPE__;
+using u32 = __UINT32_TYPE__;
+using u16 = __UINT16_TYPE__;
+using u8 = __UINT8_TYPE__;
+using i64 = __INT64_TYPE__;
+using i32 = __INT32_TYPE__;
+using i16 = __INT16_TYPE__;
+using i8 = __INT8_TYPE__;
 
 #ifdef __serenity__
 
-typedef __SIZE_TYPE__ size_t;
-typedef MakeSigned<size_t>::type ssize_t;
+using size_t = __SIZE_TYPE__;
+using ssize_t = MakeSigned<size_t>;
 
-typedef __PTRDIFF_TYPE__ ptrdiff_t;
+using ptrdiff_t = __PTRDIFF_TYPE__;
 
-typedef __INTPTR_TYPE__ intptr_t;
-typedef __UINTPTR_TYPE__ uintptr_t;
+using intptr_t = __INTPTR_TYPE__;
+using uintptr_t = __UINTPTR_TYPE__;
 
-typedef u8 uint8_t;
-typedef u16 uint16_t;
-typedef u32 uint32_t;
-typedef u64 uint64_t;
+using uint8_t = u8;
+using uint16_t = u16;
+using uint32_t = u32;
+using uint64_t = u64;
 
-typedef i8 int8_t;
-typedef i16 int16_t;
-typedef i32 int32_t;
-typedef i64 int64_t;
+using int8_t = i8;
+using int16_t = i16;
+using int32_t = i32;
+using int64_t = i64;
 
-typedef int pid_t;
+using pid_t = int;
 
 #else
+#    include <stddef.h>
 #    include <stdint.h>
 #    include <sys/types.h>
 
 #    ifdef __ptrdiff_t
-typedef __PTRDIFF_TYPE__ __ptrdiff_t;
+using __ptrdiff_t = __PTRDIFF_TYPE__;
 #    endif
 
 #endif
 
-typedef Conditional<sizeof(void*) == 8, u64, u32>::Type FlatPtr;
+using FlatPtr = Conditional<sizeof(void*) == 8, u64, u32>;
 
-constexpr unsigned KB = 1024;
-constexpr unsigned MB = KB * KB;
-constexpr unsigned GB = KB * KB * KB;
+constexpr u64 KiB = 1024;
+constexpr u64 MiB = KiB * KiB;
+constexpr u64 GiB = KiB * KiB * KiB;
+constexpr u64 TiB = KiB * KiB * KiB * KiB;
+constexpr u64 PiB = KiB * KiB * KiB * KiB * KiB;
+constexpr u64 EiB = KiB * KiB * KiB * KiB * KiB * KiB;
 
 namespace std {
-typedef decltype(nullptr) nullptr_t;
+using nullptr_t = decltype(nullptr);
 }
 
 static constexpr u32 explode_byte(u8 b)
@@ -91,11 +75,26 @@ static_assert(explode_byte(0x80) == 0x80808080);
 static_assert(explode_byte(0x7f) == 0x7f7f7f7f);
 static_assert(explode_byte(0) == 0);
 
-inline constexpr size_t align_up_to(const size_t value, const size_t alignment)
+constexpr size_t align_up_to(const size_t value, const size_t alignment)
 {
     return (value + (alignment - 1)) & ~(alignment - 1);
 }
 
-enum class TriState : u8 { False,
+enum class [[nodiscard]] TriState : u8 {
+    False,
     True,
-    Unknown };
+    Unknown
+};
+
+namespace AK {
+
+enum MemoryOrder {
+    memory_order_relaxed = __ATOMIC_RELAXED,
+    memory_order_consume = __ATOMIC_CONSUME,
+    memory_order_acquire = __ATOMIC_ACQUIRE,
+    memory_order_release = __ATOMIC_RELEASE,
+    memory_order_acq_rel = __ATOMIC_ACQ_REL,
+    memory_order_seq_cst = __ATOMIC_SEQ_CST
+};
+
+}

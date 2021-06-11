@@ -23,11 +23,6 @@
  */
 
 /*
- * Define EXT2FS_DEBUG to produce debug messages
- */
-#undef EXT2FS_DEBUG
-
-/*
  * Define EXT2_PREALLOCATE to preallocate data blocks for expanding files
  */
 #define EXT2_PREALLOCATE
@@ -669,7 +664,7 @@ struct ext2_dir_entry {
     __u32 inode;              /* Inode number */
     __u16 rec_len;            /* Directory entry length */
     __u16 name_len;           /* Name length */
-    char name[EXT2_NAME_LEN]; /* File name */
+    char name[EXT2_NAME_LEN]; /* Filename */
 };
 
 /*
@@ -683,7 +678,7 @@ struct ext2_dir_entry_2 {
     __u16 rec_len; /* Directory entry length */
     __u8 name_len; /* Name length */
     __u8 file_type;
-    char name[EXT2_NAME_LEN]; /* File name */
+    char name[EXT2_NAME_LEN]; /* Filename */
 };
 
 /*

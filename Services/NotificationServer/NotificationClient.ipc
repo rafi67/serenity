@@ -1,4 +1,0 @@
-endpoint NotificationClient = 92
-{
-    Dummy() =|
-}

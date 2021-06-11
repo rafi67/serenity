@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -36,6 +16,8 @@ namespace Kernel {
 namespace ACPI {
 
 namespace FADTFlags {
+
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#fixed-acpi-description-table-fixed-feature-flags
 enum class FeatureFlags : u32 {
     WBINVD = 1 << 0,
     WBINVD_FLUSH = 1 << 1,
@@ -61,6 +43,7 @@ enum class FeatureFlags : u32 {
     LOW_POWER_S0_IDLE_CAPABLE = 1 << 21
 };
 
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#fixed-acpi-description-table-boot-ia-pc-boot-architecture-flags
 enum class IA_PC_Flags : u8 {
     Legacy_Devices = 1 << 0,
     PS2_8042 = 1 << 1,
@@ -70,8 +53,7 @@ enum class IA_PC_Flags : u8 {
     CMOS_RTC_Not_Present = 1 << 5
 };
 
-struct [[gnu::packed]] HardwareFeatures
-{
+struct [[gnu::packed]] HardwareFeatures {
     bool wbinvd : 1;
     bool wbinvd_flush : 1;
     bool processor_c1 : 1;
@@ -95,8 +77,7 @@ struct [[gnu::packed]] HardwareFeatures
     bool hardware_reduced_acpi : 1;
     bool low_power_s0_idle_capable : 1;
 };
-struct [[gnu::packed]] x86_Specific_Flags
-{
+struct [[gnu::packed]] x86_Specific_Flags {
     bool legacy_devices : 1;
     bool keyboard_8042 : 1;
     bool vga_not_present : 1;
@@ -132,8 +113,9 @@ enum class BitWidth {
 }
 
 namespace Structures {
-struct [[gnu::packed]] RSDPDescriptor
-{
+
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#root-system-description-pointer-rsdp-structure
+struct [[gnu::packed]] RSDPDescriptor {
     char sig[8];
     u8 checksum;
     char oem_id[6];
@@ -141,8 +123,7 @@ struct [[gnu::packed]] RSDPDescriptor
     u32 rsdt_ptr;
 };
 
-struct [[gnu::packed]] RSDPDescriptor20
-{
+struct [[gnu::packed]] RSDPDescriptor20 {
     RSDPDescriptor base;
     u32 length;
     u64 xsdt_ptr;
@@ -150,8 +131,8 @@ struct [[gnu::packed]] RSDPDescriptor20
     u8 reserved[3];
 };
 
-struct [[gnu::packed]] SDTHeader
-{
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#system-description-table-header
+struct [[gnu::packed]] SDTHeader {
     char sig[4];
     u32 length;
     u8 revision;
@@ -163,20 +144,19 @@ struct [[gnu::packed]] SDTHeader
     u32 creator_revision;
 };
 
-struct [[gnu::packed]] RSDT
-{
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#root-system-description-table-rsdt
+struct [[gnu::packed]] RSDT {
     SDTHeader h;
     u32 table_ptrs[];
 };
 
-struct [[gnu::packed]] XSDT
-{
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#extended-system-description-table-xsdt
+struct [[gnu::packed]] XSDT {
     SDTHeader h;
     u64 table_ptrs[];
 };
 
-struct [[gnu::packed]] GenericAddressStructure
-{
+struct [[gnu::packed]] GenericAddressStructure {
     u8 address_space;
     u8 bit_width;
     u8 bit_offset;
@@ -184,8 +164,7 @@ struct [[gnu::packed]] GenericAddressStructure
     u64 address;
 };
 
-struct [[gnu::packed]] HPET
-{
+struct [[gnu::packed]] HPET {
     SDTHeader h;
     u8 hardware_revision_id;
     u8 attributes;
@@ -196,8 +175,8 @@ struct [[gnu::packed]] HPET
     u8 page_protection;
 };
 
-struct [[gnu::packed]] FADT
-{
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#fixed-acpi-description-table-fadt
+struct [[gnu::packed]] FADT {
     SDTHeader h;
     u32 firmware_ctrl;
     u32 dsdt_ptr;
@@ -255,6 +234,8 @@ struct [[gnu::packed]] FADT
     GenericAddressStructure sleep_status;
     u64 hypervisor_vendor_identity;
 };
+
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#interrupt-controller-structure-types
 enum class MADTEntryType {
     LocalAPIC = 0x0,
     IOAPIC = 0x1,
@@ -274,15 +255,15 @@ enum class MADTEntryType {
     GIC_Interrupt_Translation = 0xF
 };
 
-struct [[gnu::packed]] MADTEntryHeader
-{
+struct [[gnu::packed]] MADTEntryHeader {
     u8 type;
     u8 length;
 };
 
 namespace MADTEntries {
-struct [[gnu::packed]] IOAPIC
-{
+
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#i-o-apic-structure
+struct [[gnu::packed]] IOAPIC {
     MADTEntryHeader h;
     u8 ioapic_id;
     u8 reserved;
@@ -290,8 +271,16 @@ struct [[gnu::packed]] IOAPIC
     u32 gsi_base;
 };
 
-struct [[gnu::packed]] InterruptSourceOverride
-{
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#processor-local-apic-structure
+struct [[gnu::packed]] ProcessorLocalAPIC {
+    MADTEntryHeader h;
+    u8 acpi_processor_id;
+    u8 apic_id;
+    u32 flags;
+};
+
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#interrupt-source-override-structure
+struct [[gnu::packed]] InterruptSourceOverride {
     MADTEntryHeader h;
     u8 bus;
     u8 source;
@@ -300,22 +289,20 @@ struct [[gnu::packed]] InterruptSourceOverride
 };
 }
 
-struct [[gnu::packed]] MADT
-{
+// https://uefi.org/specs/ACPI/6.4/05_ACPI_Software_Programming_Model/ACPI_Software_Programming_Model.html#multiple-apic-description-table-madt-format
+struct [[gnu::packed]] MADT {
     SDTHeader h;
     u32 lapic_address;
     u32 flags;
     MADTEntryHeader entries[];
 };
 
-struct [[gnu::packed]] AMLTable
-{
+struct [[gnu::packed]] AMLTable {
     SDTHeader h;
     char aml_code[];
 };
 
-struct [[gnu::packed]] PCI_MMIO_Descriptor
-{
+struct [[gnu::packed]] PCI_MMIO_Descriptor {
     u64 base_addr;
     u16 seg_group_number;
     u8 start_pci_bus;
@@ -323,8 +310,7 @@ struct [[gnu::packed]] PCI_MMIO_Descriptor
     u32 reserved;
 };
 
-struct [[gnu::packed]] MCFG
-{
+struct [[gnu::packed]] MCFG {
     SDTHeader header;
     u64 reserved;
     PCI_MMIO_Descriptor descriptors[];

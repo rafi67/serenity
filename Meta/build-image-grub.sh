@@ -8,7 +8,9 @@ die() {
 }
 
 if [ "$(id -u)" != 0 ]; then
-    die "this script needs to run as root"
+    exec sudo -E -- "$0" "$@" || die "this script needs to run as root"
+else
+    : "${SUDO_UID:=0}" "${SUDO_GID:=0}"
 fi
 
 grub=$(command -v grub-install 2>/dev/null) || true
@@ -21,7 +23,20 @@ if [ -z "$grub" ]; then
 fi
 echo "using grub-install at ${grub}"
 
+disk_usage() {
+if [ "$(uname -s)" = "Darwin" ]; then
+    du -sm "$1" | cut -f1
+else
+    du -sm --apparent-size "$1" | cut -f1
+fi
+}
+
+DISK_SIZE=$(($(disk_usage "$SERENITY_SOURCE_DIR/Base") + $(disk_usage Root) + 300))
+
 echo "setting up disk image..."
+if [ "$1" = "ebr" ]; then
+    DISK_SIZE=
+fi
 dd if=/dev/zero of=grub_disk_image bs=1M count="${DISK_SIZE:-800}" status=none || die "couldn't create disk image"
 chown "$SUDO_UID":"$SUDO_GID" grub_disk_image || die "couldn't adjust permissions on disk image"
 echo "done"
@@ -51,11 +66,11 @@ trap cleanup EXIT
 
 printf "creating partition table... "
 if [ "$1" = "mbr" ]; then
-    parted -s "${dev}" mklabel msdos mkpart primary ext2 32k 100% -a minimal set 1 boot on || die "couldn't partition disk"
+    parted -s "${dev}" mklabel msdos mkpart primary ext2 1MiB 100% -a minimal set 1 boot on || die "couldn't partition disk"
     partition_number="p1"
     partition_scheme="mbr"
 elif [ "$1" = "gpt" ]; then
-    parted -s "${dev}" mklabel gpt mkpart BIOSBOOT ext3 1MiB 8MiB mkpart OS ext2 8MiB 700MiB set 1 bios_grub || die "couldn't partition disk"
+    parted -s "${dev}" mklabel gpt mkpart BIOSBOOT ext3 1MiB 8MiB mkpart OS ext2 8MiB 290MiB set 1 bios_grub || die "couldn't partition disk"
     partition_number="p2"
     partition_scheme="gpt"
 elif [ "$1" = "ebr" ]; then
@@ -63,7 +78,7 @@ elif [ "$1" = "ebr" ]; then
     partition_number="p5"
     partition_scheme="ebr"
 else
-    parted -s "${dev}" mklabel msdos mkpart primary ext2 32k 100% -a minimal set 1 boot on || die "couldn't partition disk"
+    parted -s "${dev}" mklabel msdos mkpart primary ext2 1MiB 100% -a minimal set 1 boot on || die "couldn't partition disk"
     partition_number="p1"
     partition_scheme="mbr"
 fi
@@ -86,12 +101,18 @@ echo "done"
 script_path=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 "$script_path/build-root-filesystem.sh"
 
-echo "installing grub using $grub..."
+if [ -z "$2" ]; then
+    grub_cfg="$SERENITY_SOURCE_DIR"/Meta/grub-"${partition_scheme}".cfg
+else
+    grub_cfg=$2
+fi
+
+echo "installing grub using $grub with $grub_cfg..."
 $grub --boot-directory=mnt/boot --target=i386-pc --modules="ext2 part_msdos" "${dev}"
 
 if [ -d mnt/boot/grub2 ]; then
-    cp "$SERENITY_ROOT"/Meta/grub-"${partition_scheme}".cfg mnt/boot/grub2/grub.cfg
+    cp "$grub_cfg" mnt/boot/grub2/grub.cfg
 else
-    cp "$SERENITY_ROOT"/Meta/grub-"${partition_scheme}".cfg mnt/boot/grub/grub.cfg
+    cp "$grub_cfg" mnt/boot/grub/grub.cfg
 fi
 echo "done"

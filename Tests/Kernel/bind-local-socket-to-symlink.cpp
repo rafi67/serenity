@@ -1,3 +1,11 @@
+/*
+ * Copyright (c) 2018-2020, the SerenityOS developers.
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+#include <AK/Assertions.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -21,11 +29,13 @@ int main(int, char**)
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    VERIFY(strlcpy(addr.sun_path, path, sizeof(addr.sun_path)) < sizeof(addr.sun_path));
 
     rc = bind(fd, (struct sockaddr*)(&addr), sizeof(addr));
-    if (rc < 0 && errno == EADDRINUSE)
+    if (rc < 0 && errno == EADDRINUSE) {
+        printf("PASS\n");
         return 0;
+    }
 
     return 1;
 }

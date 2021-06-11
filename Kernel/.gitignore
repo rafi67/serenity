@@ -1,4 +1,0 @@
-kernel.map
-sync-local.sh
-*.pcap
-eth_null*

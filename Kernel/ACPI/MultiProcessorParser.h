@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -34,8 +14,7 @@
 namespace Kernel {
 namespace MultiProcessor {
 
-struct [[gnu::packed]] FloatingPointer
-{
+struct [[gnu::packed]] FloatingPointer {
     char sig[4];
     u32 physical_address_ptr;
     u8 length;
@@ -44,13 +23,11 @@ struct [[gnu::packed]] FloatingPointer
     u8 feature_info[5];
 };
 
-struct [[gnu::packed]] EntryHeader
-{
+struct [[gnu::packed]] EntryHeader {
     u8 entry_type;
 };
 
-struct [[gnu::packed]] ConfigurationTableHeader
-{
+struct [[gnu::packed]] ConfigurationTableHeader {
     char sig[4];
     u16 length;
     u8 specification_revision;
@@ -78,14 +55,12 @@ enum class ConfigurationTableEntryType {
     CompatibilityBusAddressSpaceModifier = 130
 };
 
-struct [[gnu::packed]] ExtEntryHeader
-{
+struct [[gnu::packed]] ExtEntryHeader {
     u8 entry_type;
     u8 entry_length;
 };
 
-struct [[gnu::packed]] ProcessorEntry
-{
+struct [[gnu::packed]] ProcessorEntry {
     EntryHeader h;
     u8 local_apic_id;
     u8 local_apic_version;
@@ -95,15 +70,13 @@ struct [[gnu::packed]] ProcessorEntry
     u8 reserved[8];
 };
 
-struct [[gnu::packed]] BusEntry
-{
+struct [[gnu::packed]] BusEntry {
     EntryHeader h;
     u8 bus_id;
     char bus_type[6];
 };
 
-struct [[gnu::packed]] IOAPICEntry
-{
+struct [[gnu::packed]] IOAPICEntry {
     EntryHeader h;
     u8 ioapic_id;
     u8 ioapic_version;
@@ -118,8 +91,7 @@ enum class InterruptType {
     ExtINT = 3,
 };
 
-struct [[gnu::packed]] IOInterruptAssignmentEntry
-{
+struct [[gnu::packed]] IOInterruptAssignmentEntry {
     EntryHeader h;
     u8 interrupt_type;
     u8 polarity;
@@ -130,8 +102,7 @@ struct [[gnu::packed]] IOInterruptAssignmentEntry
     u8 destination_ioapic_intin_pin;
 };
 
-struct [[gnu::packed]] LocalInterruptAssignmentEntry
-{
+struct [[gnu::packed]] LocalInterruptAssignmentEntry {
     EntryHeader h;
     u8 interrupt_type;
     u8 polarity;
@@ -148,8 +119,7 @@ enum class SystemAddressType {
     Prefetch = 2,
 };
 
-struct [[gnu::packed]] SystemAddressSpaceMappingEntry
-{
+struct [[gnu::packed]] SystemAddressSpaceMappingEntry {
     ExtEntryHeader h;
     u8 bus_id;
     u8 address_type;
@@ -157,8 +127,7 @@ struct [[gnu::packed]] SystemAddressSpaceMappingEntry
     u64 length;
 };
 
-struct [[gnu::packed]] BusHierarchyDescriptorEntry
-{
+struct [[gnu::packed]] BusHierarchyDescriptorEntry {
     ExtEntryHeader h;
     u8 bus_id;
     u8 bus_info;
@@ -166,8 +135,7 @@ struct [[gnu::packed]] BusHierarchyDescriptorEntry
     u8 reserved[3];
 };
 
-struct [[gnu::packed]] CompatibilityBusAddressSpaceModifierEntry
-{
+struct [[gnu::packed]] CompatibilityBusAddressSpaceModifierEntry {
     ExtEntryHeader h;
     u8 bus_id;
     u8 address_modifier;

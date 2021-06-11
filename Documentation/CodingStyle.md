@@ -2,7 +2,7 @@
 
 For low-level styling (spaces, parentheses, brace placement, etc), all code should follow the format specified in `.clang-format` in the project root.
 
-**Important: Make sure you use `clang-format` version 10 or later!**
+**Important: Make sure you use `clang-format` version 11 or later!**
 
 This document describes the coding style used for C++ code in the Serenity Operating System project. All new code should conform to this style.
 
@@ -118,7 +118,7 @@ bool convert_to_ascii(short*, size_t);
 bool to_ascii(short*, size_t);
 ```
 
-[](#names-if-exists) When there are two getters for a variable, and one of them automatically makes sure the requested object is instantiated, prefix that getter function which with `ensure_`. As it ensures that an object is created, it should consequently also return a reference, not a pointer.
+[](#names-if-exists) When there are two getters for a variable, and one of them automatically makes sure the requested object is instantiated, prefix that getter function with `ensure_`. As it ensures that an object is created, it should consequently also return a reference, not a pointer.
 
 ###### Right:
 
@@ -261,8 +261,7 @@ for (auto it = children.begin(); it != children.end(); ++it)
 
 ### Pointers and References
 
-[](#pointers-cpp) **Pointer and reference types in C++ code**
-Both pointer types and reference types should be written with no space between the type name and the `*` or `&`.
+[](#pointers-cpp) Both pointer types and reference types should be written with no space between the type name and the `*` or `&`.
 
 [](#pointers-out-argument) An out argument of a function should be passed by reference except rare cases where it is optional in which case it should be passed by pointer.
 
@@ -396,12 +395,12 @@ struct Thingy {
 
 class Doohickey {
 public:
-    const String& name() const { return m_name; }
+    String const& name() const { return m_name; }
     int frob_count() const { return m_frob_count; }
 
     void jam();
 
-private;
+private:
     String m_name;
     int m_frob_count { 0 };
 }
@@ -421,7 +420,7 @@ private:
 
 class Doohickey {
 public:
-    const String& name() const { return this->name; }
+    String const& name() const { return this->name; }
 
     void jam();
 
@@ -493,7 +492,7 @@ UniqueObject& my_unique_object(); // Free function.
 
 ### Comments
 
-[](#comments-sentences) Make comments look like sentences by starting with a capital letter and ending with a period (punctation). One exception may be end of line comments like this `if (x == y) // false for NaN`.
+[](#comments-sentences) Make comments look like sentences by starting with a capital letter and ending with a period (punctuation). One exception may be end of line comments like this `if (x == y) // false for NaN`.
 
 [](#comments-fixme) Use FIXME: (without attribution) to denote items that need to be addressed in the future.
 
@@ -583,3 +582,18 @@ public:
 }
 ```
 
+### Const placement
+
+[](#east-const) Use "east const" style where `const` is written on the right side of the type being qualified. See [this article](https://mariusbancila.ro/blog/2018/11/23/join-the-east-const-revolution/) for more information about east const.
+
+###### Right:
+
+```cpp
+Salt const& m_salt;
+```
+
+###### Wrong:
+
+```cpp
+const Salt& m_salt;
+```

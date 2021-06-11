@@ -12,7 +12,7 @@ $ xargs [options...] [command [initial-arguments...]]
 
 `xargs` reads items from a stream, delimited by some blank character (`delimiter`), and executes the `command` as many times as there are items, with any processed `initial-arguments`, possibly followed by a number of items read from the input.
 
-If a `placeholder` is explicitly specified, the `max-lines` limit is set to 1, and each argument in `initial-arguments` is processed by replacing any occurence of the `placeholder` with the input item, and treating the entire resulting value as _one_ argument.
+If a `placeholder` is explicitly specified, the `max-lines` limit is set to 1, and each argument in `initial-arguments` is processed by replacing any occurrence of the `placeholder` with the input item, and treating the entire resulting value as _one_ argument.
 
 It is to be noted that `command` is also subject to substitution in this mode.
 
@@ -33,7 +33,7 @@ The standard input is left as-is if data is read from a file.
 * `-0`, `--null`: Split the items by zero bytes (null characters) instead of `delimiter`
 * `-d`, `--delimiter`: Set the `delimiter`, which is a newline (`\n`) by default
 * `-v`, `--verbose`: Display each expanded command on standard error before executing it
-* `-a`, `--arg-file`: Read the items from the speified file, `-` refers to standard input and is the default
+* `-a`, `--arg-file`: Read the items from the specified file, `-` refers to standard input and is the default
 * `-L`, `--line-limit`: Set `max-lines`, `0` means unlimited (which is the default)
 * `-s`, `--char-limit`: Set `max-chars`, which is `ARG_MAX` (the maximum command size supported by the system) by default
 
@@ -45,3 +45,7 @@ $ xargs -a list-of-files-to-delete --verbose rm
 $ xargs -a list-of-moves -L 2 mv
 $ xargs -a stuff --null -s 1024
 ```
+
+## See also
+
+* [`find`(1)](find.md)

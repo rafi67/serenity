@@ -2,6 +2,3 @@
 Name=Screensaver
 Executable=/bin/Screensaver
 Category=Demos
-
-[Icons]
-16x16=/res/icons/16x16/app-screensaver.png

@@ -1,26 +1,34 @@
-#!/bin/bash
-set -e pipefail
+#!/usr/bin/env bash
+
+set -eo pipefail
 
 script_path=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 cd "$script_path/.."
 
-ERRORS=()
+if [ "$#" -eq "0" ]; then
+    mapfile -t files < <(
+        git ls-files -- \
+            '*.sh' \
+            ':!:Ports' \
+            ':!:Userland/Shell/Tests' \
+            ':!:Base/home/anon/tests'
+    )
+else
+    files=()
+    for file in "$@"; do
+        if [[ "${file}" == *".sh" ]]; then
+            files+=("${file}")
+        fi
+    done
+fi
 
-while IFS= read -r f; do
-    if file "$f" | grep --quiet shell; then
-        {
-            shellcheck "$f" && echo -e "[\033[0;32mOK\033[0m]: sucessfully linted $f"
-        } || {
-            ERRORS+=("$f")
-        }
+if (( ${#files[@]} )); then
+    if ! command -v shellcheck &>/dev/null ; then
+        echo "shellcheck is not available, but shell files need linting! Either skip this script, or install shellcheck."
+        exit 1
     fi
-done < <(git ls-files -- \
-    '*.sh' \
-    ':!:Toolchain' \
-    ':!:Ports' \
-)
 
-if (( ${#ERRORS[@]} )); then
-    echo "Files failing shellcheck: ${ERRORS[*]}"
-    exit 1
+    shellcheck "${files[@]}"
+else
+    echo "No .sh files to check."
 fi

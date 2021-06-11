@@ -1,54 +1,19 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/ByteBuffer.h>
 #include <AK/FlyString.h>
+#include <AK/Format.h>
 #include <AK/Memory.h>
 #include <AK/StdLibExtras.h>
 #include <AK/String.h>
-#include <AK/StringBuilder.h>
 #include <AK/StringView.h>
 #include <AK/Vector.h>
 
-#ifndef KERNEL
-#    include <inttypes.h>
-#endif
-
-#ifdef KERNEL
-extern "C" char* strstr(const char* haystack, const char* needle);
-#endif
-
 namespace AK {
-
-String::String(const StringView& view)
-{
-    if (view.m_impl)
-        m_impl = *view.m_impl;
-    else
-        m_impl = StringImpl::create(view.characters_without_null_termination(), view.length());
-}
 
 bool String::operator==(const FlyString& fly_string) const
 {
@@ -63,10 +28,7 @@ bool String::operator==(const String& other) const
     if (!other.m_impl)
         return false;
 
-    if (length() != other.length())
-        return false;
-
-    return !memcmp(characters(), other.characters(), length());
+    return *m_impl == *other.m_impl;
 }
 
 bool String::operator==(const StringView& other) const
@@ -105,9 +67,16 @@ bool String::operator>(const String& other) const
     return strcmp(characters(), other.characters()) > 0;
 }
 
-String String::empty()
+bool String::copy_characters_to_buffer(char* buffer, size_t buffer_size) const
 {
-    return StringImpl::the_empty_stringimpl();
+    // We must fit at least the NUL-terminator.
+    VERIFY(buffer_size > 0);
+
+    size_t characters_to_copy = min(length(), buffer_size - 1);
+    __builtin_memcpy(buffer, characters(), characters_to_copy);
+    buffer[characters_to_copy] = 0;
+
+    return characters_to_copy == length();
 }
 
 String String::isolated_copy() const
@@ -122,22 +91,36 @@ String String::isolated_copy() const
     return String(move(*impl));
 }
 
+String String::substring(size_t start) const
+{
+    VERIFY(m_impl);
+    VERIFY(start <= length());
+    return { characters() + start, length() - start };
+}
+
 String String::substring(size_t start, size_t length) const
 {
     if (!length)
-        return {};
-    ASSERT(m_impl);
-    ASSERT(start + length <= m_impl->length());
+        return "";
+    VERIFY(m_impl);
+    VERIFY(start + length <= m_impl->length());
     // FIXME: This needs some input bounds checking.
     return { characters() + start, length };
 }
 
 StringView String::substring_view(size_t start, size_t length) const
 {
-    ASSERT(m_impl);
-    ASSERT(start + length <= m_impl->length());
+    VERIFY(m_impl);
+    VERIFY(start + length <= m_impl->length());
     // FIXME: This needs some input bounds checking.
     return { characters() + start, length };
+}
+
+StringView String::substring_view(size_t start) const
+{
+    VERIFY(m_impl);
+    VERIFY(start <= length());
+    return { characters() + start, length() - start };
 }
 
 Vector<String> String::split(char separator, bool keep_empty) const
@@ -192,83 +175,35 @@ Vector<StringView> String::split_view(const char separator, bool keep_empty) con
 ByteBuffer String::to_byte_buffer() const
 {
     if (!m_impl)
-        return nullptr;
+        return {};
     return ByteBuffer::copy(reinterpret_cast<const u8*>(characters()), length());
 }
 
-int String::to_int(bool& ok) const
+template<typename T>
+Optional<T> String::to_int() const
 {
-    return StringUtils::convert_to_int(this->view(), ok);
+    return StringUtils::convert_to_int<T>(view());
 }
 
-unsigned String::to_uint(bool& ok) const
+template Optional<i8> String::to_int() const;
+template Optional<i16> String::to_int() const;
+template Optional<i32> String::to_int() const;
+template Optional<i64> String::to_int() const;
+
+template<typename T>
+Optional<T> String::to_uint() const
 {
-    return StringUtils::convert_to_uint(this->view(), ok);
+    return StringUtils::convert_to_uint<T>(view());
 }
 
-String String::number(unsigned long long value)
-{
-    int size;
-    char buffer[32];
-    size = sprintf(buffer, "%llu", value);
-    return String(buffer, size);
-}
+template Optional<u8> String::to_uint() const;
+template Optional<u16> String::to_uint() const;
+template Optional<u32> String::to_uint() const;
+template Optional<u64> String::to_uint() const;
 
-String String::number(unsigned long value)
+bool String::starts_with(const StringView& str, CaseSensitivity case_sensitivity) const
 {
-    int size;
-    char buffer[32];
-    size = sprintf(buffer, "%lu", value);
-    return String(buffer, size);
-}
-
-String String::number(unsigned value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%u", value);
-    return String(buffer, size);
-}
-
-String String::number(long long value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%lld", value);
-    return String(buffer, size);
-}
-
-String String::number(long value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%ld", value);
-    return String(buffer, size);
-}
-
-String String::number(int value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%d", value);
-    return String(buffer, size);
-}
-
-String String::format(const char* fmt, ...)
-{
-    StringBuilder builder;
-    va_list ap;
-    va_start(ap, fmt);
-    builder.appendvf(fmt, ap);
-    va_end(ap);
-    return builder.to_string();
-}
-
-bool String::starts_with(const StringView& str) const
-{
-    if (str.is_empty())
-        return true;
-    if (is_empty())
-        return false;
-    if (str.length() > length())
-        return false;
-    return !memcmp(characters(), str.characters_without_null_termination(), str.length());
+    return StringUtils::starts_with(*this, str, case_sensitivity);
 }
 
 bool String::starts_with(char ch) const
@@ -289,6 +224,7 @@ bool String::ends_with(char ch) const
         return false;
     return characters()[length() - 1] == ch;
 }
+
 String String::repeated(char ch, size_t count)
 {
     if (!count)
@@ -299,28 +235,57 @@ String String::repeated(char ch, size_t count)
     return *impl;
 }
 
+String String::repeated(const StringView& string, size_t count)
+{
+    if (!count || string.is_empty())
+        return empty();
+    char* buffer;
+    auto impl = StringImpl::create_uninitialized(count * string.length(), buffer);
+    for (size_t i = 0; i < count; i++)
+        __builtin_memcpy(buffer + i * string.length(), string.characters_without_null_termination(), string.length());
+    return *impl;
+}
+
+String String::bijective_base_from(size_t value, unsigned base, StringView map)
+{
+    if (map.is_null())
+        map = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"sv;
+
+    VERIFY(base >= 2 && base <= map.length());
+
+    // The '8 bits per byte' assumption may need to go?
+    Array<char, round_up_to_power_of_two(sizeof(size_t) * 8 + 1, 2)> buffer;
+    size_t i = 0;
+    do {
+        buffer[i++] = map[value % base];
+        value /= base;
+    } while (value > 0);
+
+    // NOTE: Weird as this may seem, the thing that comes after 'Z' is 'AA', which as a number would be '00'
+    //       to make this work, only the most significant digit has to be in a range of (1..25) as opposed to (0..25),
+    //       but only if it's not the only digit in the string.
+    if (i > 1)
+        --buffer[i - 1];
+
+    for (size_t j = 0; j < i / 2; ++j)
+        swap(buffer[j], buffer[i - j - 1]);
+
+    return String { ReadonlyBytes(buffer.data(), i) };
+}
+
+bool String::matches(const StringView& mask, Vector<MaskSpan>& mask_spans, CaseSensitivity case_sensitivity) const
+{
+    return StringUtils::matches(*this, mask, case_sensitivity, &mask_spans);
+}
+
 bool String::matches(const StringView& mask, CaseSensitivity case_sensitivity) const
 {
     return StringUtils::matches(*this, mask, case_sensitivity);
 }
 
-bool String::contains(const String& needle) const
+bool String::contains(const StringView& needle, CaseSensitivity case_sensitivity) const
 {
-    if (is_null() || needle.is_null())
-        return false;
-    return strstr(characters(), needle.characters());
-}
-
-Optional<size_t> String::index_of(const String& needle) const
-{
-    if (is_null() || needle.is_null())
-        return {};
-
-    const char* self_characters = characters();
-    const char* result = strstr(self_characters, needle.characters());
-    if (!result)
-        return {};
-    return Optional<size_t> { result - self_characters };
+    return StringUtils::contains(*this, needle, case_sensitivity);
 }
 
 bool String::equals_ignoring_case(const StringView& other) const
@@ -328,11 +293,8 @@ bool String::equals_ignoring_case(const StringView& other) const
     return StringUtils::equals_ignoring_case(view(), other);
 }
 
-int String::replace(const String& needle, const String& replacement, bool all_occurences)
+Vector<size_t> String::find_all(const String& needle) const
 {
-    if (is_empty())
-        return 0;
-
     Vector<size_t> positions;
     size_t start = 0, pos;
     for (;;) {
@@ -342,10 +304,25 @@ int String::replace(const String& needle, const String& replacement, bool all_oc
 
         pos = ptr - characters();
         positions.append(pos);
-        if (!all_occurences)
-            break;
 
         start = pos + 1;
+    }
+    return positions;
+}
+
+int String::replace(const String& needle, const String& replacement, bool all_occurrences)
+{
+    if (is_empty())
+        return 0;
+
+    Vector<size_t> positions;
+    if (all_occurrences) {
+        positions = find_all(needle);
+    } else {
+        auto pos = find(needle);
+        if (!pos.has_value())
+            return 0;
+        positions.append(pos.value());
     }
 
     if (!positions.size())
@@ -363,42 +340,29 @@ int String::replace(const String& needle, const String& replacement, bool all_oc
     return positions.size();
 }
 
-String String::trim_whitespace(TrimMode mode) const
+size_t String::count(const String& needle) const
 {
-    auto is_whitespace_character = [](char ch) -> bool {
-        return ch == '\t'
-            || ch == '\n'
-            || ch == '\v'
-            || ch == '\f'
-            || ch == '\r'
-            || ch == ' ';
-    };
+    size_t count = 0;
+    size_t start = 0, pos;
+    for (;;) {
+        const char* ptr = strstr(characters() + start, needle.characters());
+        if (!ptr)
+            break;
 
-    size_t substring_start = 0;
-    size_t substring_length = length();
-
-    if (mode == TrimMode::Left || mode == TrimMode::Both) {
-        for (size_t i = 0; i < length(); ++i) {
-            if (substring_length == 0)
-                return "";
-            if (!is_whitespace_character(characters()[i]))
-                break;
-            ++substring_start;
-            --substring_length;
-        }
+        pos = ptr - characters();
+        count++;
+        start = pos + 1;
     }
+    return count;
+}
 
-    if (mode == TrimMode::Right || mode == TrimMode::Both) {
-        for (size_t i = length() - 1; i > 0; --i) {
-            if (substring_length == 0)
-                return "";
-            if (!is_whitespace_character(characters()[i]))
-                break;
-            --substring_length;
-        }
+String String::reverse() const
+{
+    StringBuilder reversed_string;
+    for (size_t i = length(); i-- > 0;) {
+        reversed_string.append(characters()[i]);
     }
-
-    return substring(substring_start, substring_length);
+    return reversed_string.to_string();
 }
 
 String escape_html_entities(const StringView& html)
@@ -434,6 +398,11 @@ String String::to_uppercase() const
     if (!m_impl)
         return {};
     return m_impl->to_uppercase();
+}
+
+String String::to_snakecase() const
+{
+    return StringUtils::to_snakecase(*this);
 }
 
 bool operator<(const char* characters, const String& string)
@@ -477,9 +446,47 @@ bool String::operator==(const char* cstring) const
     return !__builtin_strcmp(characters(), cstring);
 }
 
-StringView String::view() const
+InputStream& operator>>(InputStream& stream, String& string)
 {
-    return { characters(), length() };
+    StringBuilder builder;
+
+    for (;;) {
+        char next_char;
+        stream >> next_char;
+
+        if (stream.has_any_error()) {
+            stream.set_fatal_error();
+            string = nullptr;
+            return stream;
+        }
+
+        if (next_char) {
+            builder.append(next_char);
+        } else {
+            string = builder.to_string();
+            return stream;
+        }
+    }
+}
+
+String String::vformatted(StringView fmtstr, TypeErasedFormatParams params)
+{
+    StringBuilder builder;
+    vformat(builder, fmtstr, params);
+    return builder.to_string();
+}
+
+Optional<size_t> String::find(char c, size_t start) const
+{
+    return find(StringView { &c, 1 }, start);
+}
+
+Optional<size_t> String::find(StringView const& view, size_t start) const
+{
+    auto index = StringUtils::find(substring_view(start), view);
+    if (!index.has_value())
+        return {};
+    return index.value() + start;
 }
 
 }
